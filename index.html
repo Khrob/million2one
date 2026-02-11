@@ -1,0 +1,2484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MILLION:1 - WebGPU</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { overflow: hidden; background: #000; font-family: 'Share Tech Mono', 'Courier New', monospace; }
+canvas { display: block; }
+#blocker {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.75); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; z-index: 100; cursor: pointer;
+}
+#blocker h1 { color: #fff; font-size: 42px; margin-bottom: 12px; font-family: sans-serif; }
+#blocker p { color: #999; font-size: 16px; font-family: sans-serif; }
+#blocker .controls { color: #666; font-size: 13px; margin-top: 24px; line-height: 1.8; font-family: monospace; text-align: left; }
+#hud { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+#crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 20px; height: 20px; }
+#crosshair::before, #crosshair::after { content: ''; position: absolute; background: rgba(255,255,255,0.8); }
+#crosshair::before { width: 2px; height: 20px; left: 9px; top: 0; }
+#crosshair::after { width: 20px; height: 2px; top: 9px; left: 0; }
+#health-bar-container { position: absolute; bottom: 30px; left: 30px; width: 200px; height: 20px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.3); border-radius: 3px; }
+#health-bar { height: 100%; background: linear-gradient(to right, #e44, #4e4); border-radius: 2px; transition: width 0.2s; }
+#health-text { position: absolute; bottom: 54px; left: 30px; color: #fff; font-size: 13px; text-shadow: 0 0 4px #000; }
+#ammo { position: absolute; bottom: 30px; right: 30px; color: #fff; font-size: 28px; text-shadow: 0 0 6px #000; }
+#ammo span { font-size: 16px; color: #aaa; }
+#alive-count { position: absolute; bottom: 60px; right: 30px; color: #ccc; font-size: 14px; text-shadow: 0 0 4px #000; text-align: right; }
+#timer { position: absolute; bottom: 60px; left: 30px; color: #ccc; font-size: 18px; text-shadow: 0 0 4px #000; letter-spacing: 2px; }
+#info { position: absolute; top: 16px; right: 16px; color: #fff; font-size: 13px; text-shadow: 0 0 4px #000; text-align: right; line-height: 1.6; }
+#hit-flash { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,0,0,0.3); pointer-events: none; z-index: 9; opacity: 0; transition: opacity 0.1s; }
+#damage-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 8; }
+#debug {
+    position: fixed; top: 0; left: 0; width: 380px; height: 100%;
+    background: rgba(10,10,15,0.92); color: #ddd; font-size: 12px;
+    overflow-y: auto; z-index: 50; display: none; padding: 0;
+    border-right: 1px solid rgba(255,255,255,0.1);
+}
+#debug::-webkit-scrollbar { width: 6px; }
+#debug::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
+.debug-header { padding: 14px 16px; font-size: 15px; font-weight: bold; color: #fff; border-bottom: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.03); display: flex; justify-content: space-between; }
+.debug-section { border-bottom: 1px solid rgba(255,255,255,0.05); }
+.debug-section-title { padding: 10px 16px; font-size: 12px; font-weight: bold; color: #8af; cursor: pointer; display: flex; justify-content: space-between; text-transform: uppercase; letter-spacing: 1px; background: rgba(255,255,255,0.02); }
+.debug-section-title:hover { background: rgba(255,255,255,0.05); }
+.debug-section-content { padding: 4px 16px 12px; }
+.debug-row { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+.debug-row label { flex: 0 0 120px; color: #aaa; font-size: 11px; }
+.debug-row input[type="range"] { flex: 1; height: 4px; -webkit-appearance: none; background: rgba(255,255,255,0.15); border-radius: 2px; outline: none; }
+.debug-row input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: #8af; cursor: pointer; }
+.debug-row .val { flex: 0 0 55px; text-align: right; color: #8af; font-size: 11px; }
+.debug-btn { padding: 6px 12px; margin: 4px 2px; background: rgba(136,170,255,0.15); color: #8af; border: 1px solid rgba(136,170,255,0.3); border-radius: 4px; cursor: pointer; font-family: monospace; font-size: 11px; }
+.debug-btn:hover { background: rgba(136,170,255,0.25); }
+.debug-stats { padding: 8px 16px; color: #888; font-size: 11px; line-height: 1.8; }
+/* === Overlays (menu, pregame, gameover) === */
+.overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; display: none; flex-direction: column; align-items: center; justify-content: center; z-index: 90; }
+#menu-overlay { background: rgba(0,0,0,0.65); }
+#menu-overlay .menu-title { color: #fff; font-size: 72px; font-weight: bold; letter-spacing: 8px; text-shadow: 0 0 30px rgba(136,170,255,0.4), 0 4px 8px rgba(0,0,0,0.8); margin-bottom: 8px; }
+#menu-overlay .menu-subtitle { color: #8af; font-size: 13px; letter-spacing: 4px; margin-bottom: 50px; text-transform: uppercase; opacity: 0.7; }
+.menu-btn { display: block; width: 260px; padding: 14px 0; margin: 6px auto; background: rgba(136,170,255,0.08); color: #8af; border: 1px solid rgba(136,170,255,0.25); border-radius: 4px; cursor: pointer; font-family: 'Share Tech Mono', monospace; font-size: 15px; letter-spacing: 2px; text-align: center; transition: all 0.15s; }
+.menu-btn:hover { background: rgba(136,170,255,0.2); border-color: rgba(136,170,255,0.5); color: #fff; transform: scale(1.02); }
+.menu-panel { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(10,10,20,0.95); border: 1px solid rgba(136,170,255,0.2); border-radius: 8px; padding: 30px 36px; min-width: 420px; max-height: 80vh; overflow-y: auto; }
+.menu-panel h2 { color: #8af; font-size: 16px; margin-bottom: 16px; letter-spacing: 2px; text-transform: uppercase; }
+.menu-panel .back-btn { margin-top: 20px; }
+.menu-panel p { color: #aaa; font-size: 13px; line-height: 1.8; margin: 6px 0; }
+.menu-panel .score-row { color: #ccc; } .menu-panel .score-row span { color: #8af; }
+#pregame-overlay { background: rgba(0,0,0,0.25); }
+.drop-text { color: #fff; font-size: 36px; letter-spacing: 4px; animation: pulse 1.5s ease-in-out infinite; }
+.drop-sub { color: #8af; font-size: 13px; margin-top: 16px; letter-spacing: 2px; opacity: 0.7; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+#gameover-overlay { background: rgba(0,0,0,0.82); }
+.go-title { color: #f44; font-size: 52px; letter-spacing: 4px; margin-bottom: 30px; text-shadow: 0 0 20px rgba(255,68,68,0.4); }
+.go-stats { color: #ccc; font-size: 15px; line-height: 2.4; margin-bottom: 30px; text-align: center; }
+.go-stats span { color: #8af; }
+.go-buttons { display: flex; gap: 16px; }
+</style>
+</head>
+<body>
+<div id="blocker">
+    <h1>MILLION:1</h1>
+    <p id="load-status">Initializing WebGPU...</p>
+    <div class="controls">
+        WASD - Move | SHIFT - Sprint | SPACE - Jump<br>
+        MOUSE - Look | CLICK - Shoot | ~ - Debug<br>
+        R - Reload | ESC - Release cursor
+    </div>
+    <button id="fullscreen-btn" class="menu-btn" style="margin-top:20px;width:200px;z-index:101;pointer-events:auto" onclick="event.stopPropagation();if(document.fullscreenElement)document.exitFullscreen();else document.documentElement.requestFullscreen()">FULLSCREEN</button>
+</div>
+<div id="hud">
+    <div id="crosshair"></div>
+    <div id="health-text">HEALTH</div>
+    <div id="health-bar-container"><div id="health-bar" style="width:100%"></div></div>
+    <div id="ammo">30 <span>/ 30</span></div>
+    <div id="alive-count"></div>
+    <div id="timer">00:00</div>
+    <div id="info"></div>
+</div>
+<div id="hit-flash"></div>
+<div id="damage-overlay"></div>
+<div id="debug"></div>
+<div id="menu-overlay" class="overlay"></div>
+<div id="pregame-overlay" class="overlay"></div>
+<div id="gameover-overlay" class="overlay"></div>
+
+<script type="importmap">
+{
+    "imports": {
+        "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.175.0/build/three.webgpu.js",
+        "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.175.0/build/three.tsl.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.175.0/examples/jsm/"
+    }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three/webgpu';
+import {
+    Fn, If, uniform, float, uint, int, vec2, vec3, vec4,
+    instancedArray, instanceIndex, positionLocal,
+    mix, step, clamp, floor, fract, hash, texture, time
+} from 'three/tsl';
+
+// ============================================================
+//  SIMPLEX NOISE
+// ============================================================
+class SimplexNoise {
+    constructor(seed = 42) {
+        const p = new Uint8Array(256);
+        for (let i = 0; i < 256; i++) p[i] = i;
+        let s = seed;
+        for (let i = 255; i > 0; i--) {
+            s = (s * 16807 + 1) % 2147483647;
+            const j = s % (i + 1);
+            [p[i], p[j]] = [p[j], p[i]];
+        }
+        this.perm = new Uint8Array(512);
+        this.perm12 = new Uint8Array(512);
+        for (let i = 0; i < 512; i++) {
+            this.perm[i] = p[i & 255];
+            this.perm12[i] = this.perm[i] % 12;
+        }
+    }
+    noise2D(x, y) {
+        const G = [[1,1],[-1,1],[1,-1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,1],[1,-1],[-1,-1]];
+        const F2 = 0.36602540378, G2 = 0.21132486540;
+        const s = (x + y) * F2;
+        const i = Math.floor(x + s), j = Math.floor(y + s);
+        const t = (i + j) * G2;
+        const x0 = x - (i - t), y0 = y - (j - t);
+        const i1 = x0 > y0 ? 1 : 0, j1 = x0 > y0 ? 0 : 1;
+        const x1 = x0 - i1 + G2, y1 = y0 - j1 + G2;
+        const x2 = x0 - 1 + 2 * G2, y2 = y0 - 1 + 2 * G2;
+        const ii = i & 255, jj = j & 255;
+        let n0 = 0, n1 = 0, n2 = 0;
+        let t0 = 0.5 - x0*x0 - y0*y0;
+        if (t0 > 0) { t0 *= t0; const g = G[this.perm12[ii + this.perm[jj]]]; n0 = t0*t0*(g[0]*x0+g[1]*y0); }
+        let t1 = 0.5 - x1*x1 - y1*y1;
+        if (t1 > 0) { t1 *= t1; const g = G[this.perm12[ii+i1+this.perm[jj+j1]]]; n1 = t1*t1*(g[0]*x1+g[1]*y1); }
+        let t2 = 0.5 - x2*x2 - y2*y2;
+        if (t2 > 0) { t2 *= t2; const g = G[this.perm12[ii+1+this.perm[jj+1]]]; n2 = t2*t2*(g[0]*x2+g[1]*y2); }
+        return 70 * (n0 + n1 + n2);
+    }
+}
+
+// ============================================================
+//  CONFIG
+// ============================================================
+const ENEMY_COUNT = 1024 * 1024; // ~1 million
+
+const CFG = {
+    terrain: { seed: 42, octaves: 6, frequency: 0.0018, amplitude: 50, lacunarity: 2.1, persistence: 0.48, offset: 25, resolution: 512 },
+    player: { walkSpeed: 8, sprintMult: 1.8, jumpForce: 12, gravity: 28, height: 1.8, slopeEffect: 0.7, maxHealth: 100 },
+    enemies: { speed: 3.5, health: 100, damage: 8, attackRange: 3, attackRate: 1.0, size: 1.2, cullDistance: 800, flowInfluence: 0.3 },
+    weapon: { damage: 35, fireRate: 5, range: 500, maxAmmo: 30, spread: 0.015, hitRadius: 1.8 },
+    pickups: { healthCount: 12, ammoCount: 15, healthAmount: 30, ammoAmount: 10, bobSpeed: 2, bobHeight: 0.3, respawnTime: 15 },
+    lighting: { sunIntensity: 1.8, sunX: 0.5, sunY: 1.0, sunZ: 0.3, ambientIntensity: 0.45, fogNear: 400, fogFar: 1200, fogColor: '#a0b8d0' },
+    world: { size: 10000 },
+    flowMap: { resolution: 64, updateInterval: 0.25 },
+    particles: { poolSize: 2097152, muzzleCount: 12, trailCount: 20, bloodCount: 25, sparkCount: 15, explosionCount: 50, explosionSparkCount: 30 },
+    projectile: { speed: 120, gravity: 30, size: 0.15, maxLife: 5, poolSize: 32, trailInterval: 0.05, explosionRadius: 25, explosionForce: 40, explosionDamage: 60 },
+    audio: { masterVolume: 0.7, sfxVolume: 0.8, musicVolume: 0.3, maxSounds: 24, spatialRefDist: 10, spatialMaxDist: 500, spatialRolloff: 1 },
+    debug: { damageFlash: false, godMode: true }
+};
+
+// ============================================================
+//  TERRAIN (CPU mesh + GPU height texture)
+// ============================================================
+class Terrain {
+    constructor(scene) {
+        this.scene = scene;
+        this.size = CFG.world.size;
+        this.res = CFG.terrain.resolution;
+        this.data = null;
+        this.mesh = null;
+        this.heightTexture = null;
+        this.generate();
+    }
+
+    generate() {
+        this.size = CFG.world.size;
+        this.res = CFG.terrain.resolution;
+        if (this.mesh) { this.scene.remove(this.mesh); this.mesh.geometry.dispose(); this.mesh.material.dispose(); }
+        const noise = new SimplexNoise(CFG.terrain.seed);
+        const { octaves, frequency, amplitude, lacunarity, persistence, offset } = CFG.terrain;
+        const res = this.res, size = this.size, r1 = res + 1;
+        this.data = new Float32Array(r1 * r1);
+        for (let z = 0; z < r1; z++) {
+            for (let x = 0; x < r1; x++) {
+                const wx = (x / res - 0.5) * size, wz = (z / res - 0.5) * size;
+                let h = 0, amp = 1, freq = frequency;
+                for (let o = 0; o < octaves; o++) { h += noise.noise2D(wx * freq, wz * freq) * amp; amp *= persistence; freq *= lacunarity; }
+                const ex = Math.abs(x / res - 0.5) * 2, ez = Math.abs(z / res - 0.5) * 2;
+                const edge = Math.max(0, 1 - Math.pow(Math.max(ex, ez), 3) * 1.5);
+                this.data[z * r1 + x] = h * amplitude * edge + offset;
+            }
+        }
+        this.buildMesh();
+        this.buildHeightTexture();
+    }
+
+    buildNoiseTexture() {
+        const texSize = 512;
+        const noise = new SimplexNoise(CFG.terrain.seed + 1337);
+        const data = new Uint8Array(texSize * texSize * 4);
+        for (let y = 0; y < texSize; y++) {
+            for (let x = 0; x < texSize; x++) {
+                const nx = x / texSize * 8, ny = y / texSize * 8;
+                let v = 0;
+                v += noise.noise2D(nx, ny) * 0.55;
+                v += noise.noise2D(nx * 2.5, ny * 2.5) * 0.3;
+                v += noise.noise2D(nx * 7, ny * 7) * 0.15;
+                v = v * 0.5 + 0.5;
+                const c = Math.floor((0.62 + v * 0.38) * 255);
+                const i = (y * texSize + x) * 4;
+                data[i] = c; data[i+1] = c; data[i+2] = c; data[i+3] = 255;
+            }
+        }
+        const tex = new THREE.DataTexture(data, texSize, texSize, THREE.RGBAFormat);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        tex.generateMipmaps = true;
+        tex.needsUpdate = true;
+        return tex;
+    }
+
+    buildMesh() {
+        const res = this.res, size = this.size, r1 = res + 1;
+        const geo = new THREE.BufferGeometry();
+        const verts = new Float32Array(r1 * r1 * 3);
+        const colors = new Float32Array(r1 * r1 * 3);
+        const uvs = new Float32Array(r1 * r1 * 2);
+        const indices = [];
+        const tileScale = 30;
+        for (let z = 0; z < r1; z++) {
+            for (let x = 0; x < r1; x++) {
+                const i = z * r1 + x;
+                const wx = (x / res - 0.5) * size, wz = (z / res - 0.5) * size, h = this.data[i];
+                verts[i*3] = wx; verts[i*3+1] = h; verts[i*3+2] = wz;
+                uvs[i*2] = wx / tileScale; uvs[i*2+1] = wz / tileScale;
+                const slope = this.getSlopeAt(x, z);
+                let r, g, b;
+                if (h < 10) { r=0.22; g=0.42; b=0.18; } else if (h < 35) { r=0.32; g=0.52; b=0.22; }
+                else if (h < 60) { r=0.45; g=0.42; b=0.28; } else if (h < 85) { r=0.55; g=0.5; b=0.4; }
+                else { r=0.85; g=0.88; b=0.92; }
+                if (slope > 0.5) { const t = Math.min(1,(slope-0.5)*2); r=r*(1-t)+0.45*t; g=g*(1-t)+0.43*t; b=b*(1-t)+0.4*t; }
+                colors[i*3]=r; colors[i*3+1]=g; colors[i*3+2]=b;
+            }
+        }
+        for (let z = 0; z < res; z++) for (let x = 0; x < res; x++) {
+            const a = z*r1+x, b = a+1, c = (z+1)*r1+x, d = c+1;
+            indices.push(a,c,b,b,c,d);
+        }
+        geo.setIndex(indices);
+        geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+        geo.computeVertexNormals();
+        if (!this._noiseTex) this._noiseTex = this.buildNoiseTexture();
+        const mat = new THREE.MeshLambertMaterial({ vertexColors: true, map: this._noiseTex });
+        this.mesh = new THREE.Mesh(geo, mat);
+        this.mesh.receiveShadow = true;
+        this.scene.add(this.mesh);
+    }
+
+    buildHeightTexture() {
+        // Reuse the same texture object so GPU compute shader references stay valid
+        const r1 = this.res + 1;
+        if (!this.heightTexture || this.heightTexture.image.width !== r1) {
+            const texData = new Float32Array(r1 * r1 * 4);
+            this.heightTexture = new THREE.DataTexture(texData, r1, r1, THREE.RGBAFormat, THREE.FloatType);
+            this.heightTexture.minFilter = THREE.LinearFilter;
+            this.heightTexture.magFilter = THREE.LinearFilter;
+            this.heightTexture.wrapS = THREE.ClampToEdgeWrapping;
+            this.heightTexture.wrapT = THREE.ClampToEdgeWrapping;
+        }
+        const texData = this.heightTexture.image.data;
+        for (let i = 0; i < r1 * r1; i++) {
+            texData[i * 4] = this.data[i];
+            texData[i * 4 + 1] = 0;
+            texData[i * 4 + 2] = 0;
+            texData[i * 4 + 3] = 1;
+        }
+        this.heightTexture.needsUpdate = true;
+    }
+
+    getSlopeAt(gx, gz) {
+        const r1 = this.res + 1;
+        const x0 = Math.max(0, gx-1), x1 = Math.min(this.res, gx+1);
+        const z0 = Math.max(0, gz-1), z1 = Math.min(this.res, gz+1);
+        const dx = this.data[gz*r1+x1] - this.data[gz*r1+x0];
+        const dz = this.data[z1*r1+gx] - this.data[z0*r1+gx];
+        const cs = this.size / this.res;
+        return Math.sqrt(dx*dx + dz*dz) / (cs * 2);
+    }
+
+    getHeight(wx, wz) {
+        const res = this.res, size = this.size, r1 = res + 1;
+        const gx = (wx / size + 0.5) * res, gz = (wz / size + 0.5) * res;
+        const ix = Math.floor(gx), iz = Math.floor(gz), fx = gx - ix, fz = gz - iz;
+        const x0 = Math.max(0, Math.min(res, ix)), x1 = Math.max(0, Math.min(res, ix+1));
+        const z0 = Math.max(0, Math.min(res, iz)), z1 = Math.max(0, Math.min(res, iz+1));
+        const h00 = this.data[z0*r1+x0], h10 = this.data[z0*r1+x1];
+        const h01 = this.data[z1*r1+x0], h11 = this.data[z1*r1+x1];
+        return (h00*(1-fx)+h10*fx)*(1-fz) + (h01*(1-fx)+h11*fx)*fz;
+    }
+
+    getNormal(wx, wz) {
+        const eps = this.size / this.res;
+        const hL = this.getHeight(wx-eps, wz), hR = this.getHeight(wx+eps, wz);
+        const hD = this.getHeight(wx, wz-eps), hU = this.getHeight(wx, wz+eps);
+        return new THREE.Vector3(hL - hR, eps * 2, hD - hU).normalize();
+    }
+}
+
+// ============================================================
+//  GPU ENEMY SYSTEM
+// ============================================================
+class GPUEnemySystem {
+    constructor(scene, terrain) {
+        this.scene = scene;
+        this.terrain = terrain;
+
+        // --- Storage arrays ---
+        this.positions = instancedArray(ENEMY_COUNT, 'vec3');
+        this.velocities = instancedArray(ENEMY_COUNT, 'vec3');
+        this.states = instancedArray(ENEMY_COUNT, 'vec4'); // x=health, y=type, z=attackTimer, w=flashTimer
+
+        // --- Uniforms (updated per frame) ---
+        this.playerPosU = uniform(new THREE.Vector3());
+        this.dtU = uniform(0.016);
+        this.cameraPosU = uniform(new THREE.Vector3());
+
+        // --- Uniforms (from config, updated via debug) ---
+        this.enemySpeedU = uniform(CFG.enemies.speed);
+        this.enemySizeU = uniform(CFG.enemies.size);
+        this.enemyMaxHealthU = uniform(CFG.enemies.health);
+        this.enemyAttackRangeU = uniform(CFG.enemies.attackRange);
+        this.worldSizeU = uniform(CFG.world.size);
+        this.cullDistU = uniform(CFG.enemies.cullDistance);
+        this.flowInfluenceU = uniform(CFG.enemies.flowInfluence);
+
+        // --- Weapon uniforms ---
+        this.rayOriginU = uniform(new THREE.Vector3());
+        this.rayDirU = uniform(new THREE.Vector3());
+        this.weaponDamageU = uniform(CFG.weapon.damage);
+        this.weaponRangeU = uniform(CFG.weapon.range);
+        this.hitRadiusU = uniform(CFG.weapon.hitRadius);
+
+        // --- Explosion uniforms ---
+        this.explosionPosU = uniform(new THREE.Vector3());
+        this.explosionRadiusU = uniform(CFG.projectile.explosionRadius);
+        this.explosionForceU = uniform(CFG.projectile.explosionForce);
+        this.explosionDamageU = uniform(CFG.projectile.explosionDamage);
+
+        // --- Flow map ---
+        this.flowMapSize = CFG.flowMap.resolution;
+        this.flowMapData = new Float32Array(this.flowMapSize * this.flowMapSize * 4);
+        this.flowMapTexture = new THREE.DataTexture(
+            this.flowMapData, this.flowMapSize, this.flowMapSize,
+            THREE.RGBAFormat, THREE.FloatType
+        );
+        this.flowMapTexture.minFilter = THREE.LinearFilter;
+        this.flowMapTexture.magFilter = THREE.LinearFilter;
+        this.flowMapTexture.wrapS = THREE.ClampToEdgeWrapping;
+        this.flowMapTexture.wrapT = THREE.ClampToEdgeWrapping;
+        this.flowMapTimer = 0;
+
+        // --- Density grid (128x128, uint) --- approximate counts, race conditions OK
+        this.DENSITY_RES = 128;
+        this.densityGrid = instancedArray(this.DENSITY_RES * this.DENSITY_RES, 'uint');
+
+        // --- Projectile collision (GPU-side hit detection) ---
+        this.PROJ_POOL = CFG.projectile.poolSize; // 32
+        // 32×2 texture: row 0 = current pos, row 1 = previous pos (for swept collision)
+        this.projPositionsData = new Float32Array(this.PROJ_POOL * 4 * 2);
+        this.projPositionsTexture = new THREE.DataTexture(
+            this.projPositionsData, this.PROJ_POOL, 2,
+            THREE.RGBAFormat, THREE.FloatType
+        );
+        this.projPositionsTexture.minFilter = THREE.NearestFilter;
+        this.projPositionsTexture.magFilter = THREE.NearestFilter;
+        this.projPositionsTexture.wrapS = THREE.ClampToEdgeWrapping;
+        this.projPositionsTexture.wrapT = THREE.ClampToEdgeWrapping;
+        this.projHitFlags = instancedArray(this.PROJ_POOL, 'uint');
+        this.projHitFlagsAttr = this.projHitFlags.value; // raw attribute for readback
+        this.projCollisionRadiusU = uniform(0.8); // enemy half-size ~0.6 + projectile size 0.15
+        this._pendingHitPromise = null;
+        this._hitResults = null;
+
+        // --- Build compute shaders ---
+        const heightTex = texture(terrain.heightTexture);
+        this.heightTexNode = heightTex;
+        const flowTex = texture(this.flowMapTexture);
+        const positions = this.positions;
+        const velocities = this.velocities;
+        const states = this.states;
+        const playerPos = this.playerPosU;
+        const dt = this.dtU;
+        const spd = this.enemySpeedU;
+        const sz = this.enemySizeU;
+        const maxHp = this.enemyMaxHealthU;
+        const ws = this.worldSizeU;
+        const flowInf = this.flowInfluenceU;
+
+        // INIT: scatter enemies randomly
+        this.computeInit = Fn(() => {
+            const pos = positions.element(instanceIndex);
+            const state = states.element(instanceIndex);
+            const vel = velocities.element(instanceIndex);
+            const angle = hash(instanceIndex).mul(Math.PI * 2);
+            const radius = hash(instanceIndex.add(7)).mul(ws.mul(0.45));
+            pos.x.assign(angle.cos().mul(radius));
+            pos.z.assign(angle.sin().mul(radius));
+            // Sample terrain height
+            const tu = pos.x.div(ws).add(0.5).clamp(0.001, 0.999);
+            const tv = pos.z.div(ws).add(0.5).clamp(0.001, 0.999);
+            pos.y.assign(heightTex.sample(vec2(tu, tv)).x.add(sz.mul(0.6)));
+            vel.assign(vec3(0, 0, 0));
+            state.x.assign(maxHp);
+            state.y.assign(hash(instanceIndex.add(2)).mul(4).floor());
+            state.z.assign(hash(instanceIndex.add(3)));
+            state.w.assign(float(0));
+        })().compute(ENEMY_COUNT);
+
+        // UPDATE: move toward player (alive), physics for all (alive + dead)
+        this.computeUpdate = Fn(() => {
+            const pos = positions.element(instanceIndex);
+            const vel = velocities.element(instanceIndex);
+            const state = states.element(instanceIndex);
+            // Flash timer decay
+            state.w.assign(state.w.sub(dt).max(0));
+
+            // Alive: swarm toward player with ring separation
+            If(state.x.greaterThan(0), () => {
+                // Distance to player
+                const rawDx = playerPos.x.sub(pos.x);
+                const rawDz = playerPos.z.sub(pos.z);
+                const distToPlayer = rawDx.mul(rawDx).add(rawDz.mul(rawDz)).sqrt().max(0.01);
+
+                // Ring separation: each enemy orbits a unique point around the player
+                const ringAngle = hash(instanceIndex.add(50)).mul(Math.PI * 2)
+                    .add(time.mul(hash(instanceIndex.add(70)).mul(0.4).add(0.1)));
+                const ringDist = float(3.0).add(hash(instanceIndex.add(60)).mul(5.0));
+
+                // Blend: far = head straight for player, close = target ring position
+                const ringBlend = float(1).sub(distToPlayer.sub(float(15)).div(float(30)).clamp(0, 1));
+                const targetX = mix(playerPos.x, playerPos.x.add(ringAngle.cos().mul(ringDist)), ringBlend);
+                const targetZ = mix(playerPos.z, playerPos.z.add(ringAngle.sin().mul(ringDist)), ringBlend);
+
+                const dx = targetX.sub(pos.x);
+                const dz = targetZ.sub(pos.z);
+                const distXZ = dx.mul(dx).add(dz.mul(dz)).sqrt().max(0.01);
+                const dirX = dx.div(distXZ);
+                const dirZ = dz.div(distXZ);
+
+                // Flow map
+                const fu = pos.x.div(ws).add(0.5).clamp(0.001, 0.999);
+                const fv = pos.z.div(ws).add(0.5).clamp(0.001, 0.999);
+                const flowSample = flowTex.sample(vec2(fu, fv));
+                const moveX = mix(dirX, flowSample.x, flowInf);
+                const moveZ = mix(dirZ, flowSample.y, flowInf);
+                const moveLen = moveX.mul(moveX).add(moveZ.mul(moveZ)).sqrt().max(0.01);
+
+                // Slow down near player to prevent pile-up
+                const closeSlowdown = distToPlayer.div(float(8)).clamp(0.15, 1.0);
+
+                // Density-based slowdown: sample the grid cell ahead and here
+                const dgx = pos.x.div(ws).add(0.5).mul(float(DRES)).clamp(0, DRES - 1).toInt();
+                const dgz = pos.z.div(ws).add(0.5).mul(float(DRES)).clamp(0, DRES - 1).toInt();
+                const cellDensity = densityGrid.element(dgz.mul(int(DRES)).add(dgx)).toFloat();
+                // Formula: 1 / (density/200 + 1) — at 200 enemies/cell speed halves, at 600 it's 25%
+                const densitySlowdown = float(1).div(cellDensity.div(float(200)).add(1));
+
+                const speedVar = float(0.7).add(hash(instanceIndex.add(99)).mul(0.6));
+                const totalSlow = closeSlowdown.mul(densitySlowdown);
+                pos.x.addAssign(moveX.div(moveLen).mul(spd).mul(speedVar).mul(totalSlow).mul(dt));
+                pos.z.addAssign(moveZ.div(moveLen).mul(spd).mul(speedVar).mul(totalSlow).mul(dt));
+            });
+
+            // Physics for ALL enemies (alive fly from explosions, dead fall to ground)
+            pos.addAssign(vel.mul(dt));
+            vel.y.subAssign(float(20).mul(dt));
+            vel.mulAssign(float(0.97));
+
+            const half = ws.mul(0.48);
+            pos.x.assign(pos.x.clamp(half.negate(), half));
+            pos.z.assign(pos.z.clamp(half.negate(), half));
+
+            // Terrain collision — dead enemies sit lower (small cubes on ground)
+            const tu2 = pos.x.div(ws).add(0.5).clamp(0.001, 0.999);
+            const tv2 = pos.z.div(ws).add(0.5).clamp(0.001, 0.999);
+            const terrainH = heightTex.sample(vec2(tu2, tv2)).x;
+            const isAlive = step(float(0.01), state.x);
+            const targetY = terrainH.add(mix(sz.mul(0.12), sz.mul(0.6), isAlive));
+
+            const belowGround = step(pos.y, targetY);
+            pos.y.assign(mix(pos.y, targetY, belowGround));
+            vel.y.assign(mix(vel.y, vel.y.max(0), belowGround));
+            vel.x.assign(mix(vel.x, vel.x.mul(0.7), belowGround));
+            vel.z.assign(mix(vel.z, vel.z.mul(0.7), belowGround));
+        })().compute(ENEMY_COUNT);
+
+        // DAMAGE: ray intersection test when player shoots
+        this.computeDamage = Fn(() => {
+            const pos = positions.element(instanceIndex);
+            const state = states.element(instanceIndex);
+            If(state.x.greaterThan(0), () => {
+                const toEnemy = pos.sub(this.rayOriginU);
+                const proj = toEnemy.dot(this.rayDirU);
+                If(proj.greaterThan(0), () => {
+                    If(proj.lessThan(this.weaponRangeU), () => {
+                        const closest = this.rayOriginU.add(this.rayDirU.mul(proj));
+                        const dist = closest.sub(pos).length();
+                        If(dist.lessThan(this.hitRadiusU), () => {
+                            state.x.subAssign(this.weaponDamageU);
+                            state.w.assign(float(0.15));
+                        });
+                    });
+                });
+            });
+        })().compute(ENEMY_COUNT);
+
+        // EXPLOSION: apply force and damage to nearby enemies
+        this.computeExplosion = Fn(() => {
+            const pos = positions.element(instanceIndex);
+            const vel = velocities.element(instanceIndex);
+            const state = states.element(instanceIndex);
+            If(state.x.greaterThan(0), () => {
+                const toEnemy = pos.sub(this.explosionPosU);
+                const dist = toEnemy.length();
+                If(dist.lessThan(this.explosionRadiusU), () => {
+                    const normDir = toEnemy.div(dist.max(float(0.5)));
+                    const falloff = float(1).sub(dist.div(this.explosionRadiusU));
+                    // Horizontal force away from explosion
+                    vel.x.addAssign(normDir.x.mul(this.explosionForceU).mul(falloff));
+                    vel.z.addAssign(normDir.z.mul(this.explosionForceU).mul(falloff));
+                    // Strong upward force
+                    vel.y.addAssign(this.explosionForceU.mul(falloff).mul(0.7));
+                    // Damage
+                    state.x.subAssign(this.explosionDamageU.mul(falloff));
+                    state.w.assign(float(0.15));
+                });
+            });
+        })().compute(ENEMY_COUNT);
+
+        // DENSITY CLEAR: zero out the entire density grid
+        const densityGrid = this.densityGrid;
+        const DRES = this.DENSITY_RES;
+        this.computeDensityClear = Fn(() => {
+            densityGrid.element(instanceIndex).assign(uint(0));
+        })().compute(DRES * DRES);
+
+        // DENSITY ACCUMULATE: each alive enemy increments its grid cell
+        this.computeDensityAccum = Fn(() => {
+            const state = states.element(instanceIndex);
+            If(state.x.greaterThan(0), () => {
+                const pos = positions.element(instanceIndex);
+                // Map world pos to grid cell
+                const gx = pos.x.div(ws).add(0.5).mul(float(DRES)).clamp(0, DRES - 1).toInt();
+                const gz = pos.z.div(ws).add(0.5).mul(float(DRES)).clamp(0, DRES - 1).toInt();
+                const cellIdx = gz.mul(int(DRES)).add(gx);
+                densityGrid.element(cellIdx).addAssign(uint(1));
+            });
+        })().compute(ENEMY_COUNT);
+
+        // PROJECTILE CLEAR: zero hit flags
+        const projHitFlags = this.projHitFlags;
+        const PPOOL = this.PROJ_POOL;
+        this.computeProjClear = Fn(() => {
+            projHitFlags.element(instanceIndex).assign(uint(0));
+        })().compute(PPOOL);
+
+        // PROJECTILE COLLISION: swept line-segment vs enemy sphere
+        // Texture is 32×2: row 0 (v=0.25) = current pos, row 1 (v=0.75) = previous pos
+        const projTex = texture(this.projPositionsTexture);
+        const projColR = this.projCollisionRadiusU;
+        this.computeProjCollision = Fn(() => {
+            const state = states.element(instanceIndex);
+            If(state.x.greaterThan(0), () => {
+                const pos = positions.element(instanceIndex);
+                for (let pi = 0; pi < PPOOL; pi++) {
+                    const pu = float(pi + 0.5).div(float(PPOOL));
+                    // Sample current and previous positions
+                    const currData = projTex.sample(vec2(pu, 0.25));
+                    const prevData = projTex.sample(vec2(pu, 0.75));
+                    If(currData.w.greaterThan(0.5), () => {
+                        // Line segment A→B (prev→curr), point P (enemy)
+                        const ax = prevData.x; const ay = prevData.y; const az = prevData.z;
+                        const bx = currData.x; const by = currData.y; const bz = currData.z;
+                        const abx = bx.sub(ax); const aby = by.sub(ay); const abz = bz.sub(az);
+                        const apx = pos.x.sub(ax); const apy = pos.y.sub(ay); const apz = pos.z.sub(az);
+                        const abDotAb = abx.mul(abx).add(aby.mul(aby)).add(abz.mul(abz));
+                        const apDotAb = apx.mul(abx).add(apy.mul(aby)).add(apz.mul(abz));
+                        // t = clamp(dot(AP,AB)/dot(AB,AB), 0, 1) — closest point parameter
+                        const t = apDotAb.div(abDotAb.max(0.0001)).clamp(0, 1);
+                        // Closest point on segment
+                        const cx = ax.add(abx.mul(t));
+                        const cy = ay.add(aby.mul(t));
+                        const cz = az.add(abz.mul(t));
+                        // Distance from closest point to enemy
+                        const dx = cx.sub(pos.x); const dy = cy.sub(pos.y); const dz = cz.sub(pos.z);
+                        const dist = dx.mul(dx).add(dy.mul(dy)).add(dz.mul(dz)).sqrt();
+                        If(dist.lessThan(projColR), () => {
+                            projHitFlags.element(pi).assign(uint(1));
+                        });
+                    });
+                }
+            });
+        })().compute(ENEMY_COUNT);
+
+        // --- Build instanced mesh ---
+        this.buildMesh(scene);
+    }
+
+    buildMesh(scene) {
+        const baseGeo = new THREE.BoxGeometry(1, 1.2, 1);
+        const instancedGeo = new THREE.InstancedBufferGeometry();
+        instancedGeo.index = baseGeo.index;
+        for (const key in baseGeo.attributes) {
+            instancedGeo.setAttribute(key, baseGeo.attributes[key]);
+        }
+        instancedGeo.instanceCount = ENEMY_COUNT;
+
+        const material = new THREE.MeshLambertMaterial();
+        const instPos = this.positions.element(instanceIndex);
+        const instState = this.states.element(instanceIndex);
+        const isAlive = step(float(0.01), instState.x);
+
+        // Distance cull: scale to 0 if beyond cull distance
+        const toCam = instPos.sub(this.cameraPosU);
+        const distSq = toCam.dot(toCam);
+        const inRange = step(distSq, this.cullDistU.mul(this.cullDistU));
+
+        // Alive: full size. Dead: 1/5 size (small cubes on the ground)
+        const aliveScale = this.enemySizeU;
+        const deadScale = this.enemySizeU.mul(0.2);
+        const scale = inRange.mul(mix(deadScale, aliveScale, isAlive));
+        material.positionNode = positionLocal.mul(scale).add(instPos);
+
+        // Color: alive = green→red health gradient with hit flash. Dead = dark gray
+        const healthPct = instState.x.div(this.enemyMaxHealthU).clamp(0, 1);
+        const healthColor = mix(vec3(0.85, 0.1, 0.1), vec3(0.25, 0.75, 0.2), healthPct);
+        const flashAmt = clamp(instState.w.mul(10), 0, 1);
+        const aliveColor = mix(healthColor, vec3(1, 1, 1), flashAmt);
+        const deadColor = vec3(0.22, 0.22, 0.22);
+        material.colorNode = mix(deadColor, aliveColor, isAlive);
+
+        this.mesh = new THREE.Mesh(instancedGeo, material);
+        this.mesh.frustumCulled = false;
+        this.mesh.renderOrder = 1;
+        scene.add(this.mesh);
+
+        // Shadow blob under each enemy
+        const shadowGeo = new THREE.CircleGeometry(1, 8);
+        shadowGeo.rotateX(-Math.PI / 2);
+        const shadowInstGeo = new THREE.InstancedBufferGeometry();
+        shadowInstGeo.index = shadowGeo.index;
+        for (const sk in shadowGeo.attributes) {
+            shadowInstGeo.setAttribute(sk, shadowGeo.attributes[sk]);
+        }
+        shadowInstGeo.instanceCount = ENEMY_COUNT;
+
+        const shadowMat = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false });
+        const sInstPos = this.positions.element(instanceIndex);
+        const sInstState = this.states.element(instanceIndex);
+        const sIsAlive = step(float(0.01), sInstState.x);
+        const sToCam = sInstPos.sub(this.cameraPosU);
+        const sDistSq = sToCam.dot(sToCam);
+        const sInRange = step(sDistSq, this.cullDistU.mul(this.cullDistU));
+        // Alive: full shadow. Dead: smaller shadow
+        const sScale = sInRange.mul(mix(this.enemySizeU.mul(0.18), this.enemySizeU.mul(0.9), sIsAlive));
+
+        // Sample terrain height for shadow Y position
+        const sTU = sInstPos.x.div(this.worldSizeU).add(0.5).clamp(0.001, 0.999);
+        const sTV = sInstPos.z.div(this.worldSizeU).add(0.5).clamp(0.001, 0.999);
+        const sTerrainH = this.heightTexNode.sample(vec2(sTU, sTV)).x;
+
+        shadowMat.positionNode = positionLocal.mul(sScale).add(vec3(sInstPos.x, sTerrainH.add(0.15), sInstPos.z));
+        shadowMat.colorNode = vec3(0, 0, 0);
+        shadowMat.opacityNode = float(0.3).mul(sInRange);
+
+        this.shadowMesh = new THREE.Mesh(shadowInstGeo, shadowMat);
+        this.shadowMesh.frustumCulled = false;
+        this.shadowMesh.renderOrder = 0;
+        scene.add(this.shadowMesh);
+    }
+
+    updateFlowMap(playerPos) {
+        const s = this.flowMapSize;
+        const ws = CFG.world.size;
+        for (let z = 0; z < s; z++) {
+            for (let x = 0; x < s; x++) {
+                const wx = (x / s - 0.5) * ws;
+                const wz = (z / s - 0.5) * ws;
+                const dx = playerPos.x - wx;
+                const dz = playerPos.z - wz;
+                const len = Math.sqrt(dx * dx + dz * dz) || 1;
+                const idx = (z * s + x) * 4;
+                this.flowMapData[idx] = dx / len;
+                this.flowMapData[idx + 1] = dz / len;
+                this.flowMapData[idx + 2] = 1;
+                this.flowMapData[idx + 3] = 1;
+            }
+        }
+        this.flowMapTexture.needsUpdate = true;
+    }
+
+    syncUniforms(dt, playerPos, cameraPos) {
+        this.dtU.value = dt;
+        this.playerPosU.value.copy(playerPos);
+        this.cameraPosU.value.copy(cameraPos);
+        this.enemySpeedU.value = CFG.enemies.speed;
+        this.enemySizeU.value = CFG.enemies.size;
+        this.enemyMaxHealthU.value = CFG.enemies.health;
+        this.enemyAttackRangeU.value = CFG.enemies.attackRange;
+        this.cullDistU.value = CFG.enemies.cullDistance;
+        this.flowInfluenceU.value = CFG.enemies.flowInfluence;
+        this.worldSizeU.value = CFG.world.size;
+        this.weaponDamageU.value = CFG.weapon.damage;
+        this.weaponRangeU.value = CFG.weapon.range;
+        this.hitRadiusU.value = CFG.weapon.hitRadius;
+
+        // Flow map update
+        this.flowMapTimer -= dt;
+        if (this.flowMapTimer <= 0) {
+            this.flowMapTimer = CFG.flowMap.updateInterval;
+            this.updateFlowMap(playerPos);
+        }
+    }
+
+    updateDensity(dt, renderer) {
+        // Must clear + accumulate every frame — density values are read in computeUpdate
+        // and would compound across frames if not cleared
+        renderer.compute(this.computeDensityClear);
+        renderer.compute(this.computeDensityAccum);
+    }
+
+    uploadProjectilePositions(pool) {
+        const stride = this.PROJ_POOL * 4; // offset to row 1 (previous positions)
+        for (let i = 0; i < this.PROJ_POOL; i++) {
+            const p = pool[i];
+            const off = i * 4;
+            if (p.active) {
+                // Row 0: current position
+                this.projPositionsData[off] = p.pos.x;
+                this.projPositionsData[off + 1] = p.pos.y;
+                this.projPositionsData[off + 2] = p.pos.z;
+                this.projPositionsData[off + 3] = 1.0;
+                // Row 1: previous position
+                this.projPositionsData[stride + off] = p.prevPos.x;
+                this.projPositionsData[stride + off + 1] = p.prevPos.y;
+                this.projPositionsData[stride + off + 2] = p.prevPos.z;
+                this.projPositionsData[stride + off + 3] = 1.0;
+            } else {
+                this.projPositionsData[off + 3] = 0.0;
+                this.projPositionsData[stride + off + 3] = 0.0;
+            }
+        }
+        this.projPositionsTexture.needsUpdate = true;
+    }
+
+    runProjectileCollision(renderer) {
+        renderer.compute(this.computeProjClear);
+        renderer.compute(this.computeProjCollision);
+    }
+
+    checkProjectileHits(renderer) {
+        if (this._pendingHitPromise) return;
+        try {
+            this._pendingHitPromise = renderer.getArrayBufferAsync(this.projHitFlagsAttr);
+            this._pendingHitPromise.then(buffer => {
+                this._hitResults = new Uint32Array(buffer.slice(0));
+                this._pendingHitPromise = null;
+            }).catch(e => {
+                console.warn('[ProjCollision] readback failed:', e);
+                this._pendingHitPromise = null;
+            });
+        } catch (e) {
+            console.warn('[ProjCollision] getArrayBufferAsync threw:', e);
+            this._pendingHitPromise = null;
+        }
+    }
+
+    consumeHits() {
+        if (!this._hitResults) return [];
+        const hits = [];
+        for (let i = 0; i < this.PROJ_POOL; i++) {
+            if (this._hitResults[i] > 0) hits.push(i);
+        }
+        this._hitResults = null;
+        return hits;
+    }
+
+    setRay(origin, direction) {
+        this.rayOriginU.value.copy(origin);
+        this.rayDirU.value.copy(direction);
+    }
+}
+
+// ============================================================
+//  GPU PARTICLE SYSTEM (pooled)
+// ============================================================
+class GPUParticleSystem {
+    constructor(scene) {
+        this.POOL_SIZE = CFG.particles.poolSize;
+        this.MAX_SPAWN = 2048;   // max per dispatch
+        this.writeHead = 0;
+        this.overflowCount = 0;
+        this.scene = scene;
+
+        // Storage buffers
+        this.positions = instancedArray(this.POOL_SIZE, 'vec3');
+        this.velocities = instancedArray(this.POOL_SIZE, 'vec3');
+        this.life = instancedArray(this.POOL_SIZE, 'vec4'); // life, maxLife, size, gravityScale
+        this.colors = instancedArray(this.POOL_SIZE, 'vec3');
+
+        // Update uniforms
+        this.dtU = uniform(0.016);
+
+        // Spawn uniforms
+        this.spawnBaseU = uniform(0);
+        this.spawnCountU = uniform(0);
+        this.spawnPosU = uniform(new THREE.Vector3());
+        this.spawnDirU = uniform(new THREE.Vector3());
+        this.spawnSpeedU = uniform(5);
+        this.spawnSpreadU = uniform(1);
+        this.spawnLifeU = uniform(1);
+        this.spawnSizeU = uniform(0.3);
+        this.spawnColorU = uniform(new THREE.Vector3(1, 0.2, 0.1));
+        this.spawnSeedU = uniform(0);
+        this.spawnGravityU = uniform(1);
+
+        this.buildComputes();
+        this.buildRenderer(scene);
+    }
+
+    buildComputes() {
+        const POOL = this.POOL_SIZE;
+        const positions = this.positions, velocities = this.velocities;
+        const life = this.life, colors = this.colors;
+        const dt = this.dtU;
+
+        // Init: zero all
+        this.computeInit = Fn(() => {
+            positions.element(instanceIndex).assign(vec3(0, -99999, 0));
+            velocities.element(instanceIndex).assign(vec3(0, 0, 0));
+            life.element(instanceIndex).assign(vec4(0, 0, 0, 0));
+            colors.element(instanceIndex).assign(vec3(0, 0, 0));
+        })().compute(POOL);
+
+        // Spawn: write [spawnBase..spawnBase+spawnCount) with new particles
+        this.computeSpawn = Fn(() => {
+            If(float(instanceIndex).lessThan(this.spawnCountU), () => {
+                const idx = float(instanceIndex).add(this.spawnBaseU).mod(float(POOL));
+                const p = positions.element(idx);
+                const v = velocities.element(idx);
+                const l = life.element(idx);
+                const c = colors.element(idx);
+
+                const seed = this.spawnSeedU.add(float(instanceIndex));
+                const r1 = hash(seed), r2 = hash(seed.add(1)), r3 = hash(seed.add(2));
+                const r4 = hash(seed.add(3)), r5 = hash(seed.add(4)), r6 = hash(seed.add(5));
+
+                // Position = origin + random spread
+                p.x.assign(this.spawnPosU.x.add(r1.sub(0.5).mul(this.spawnSpreadU)));
+                p.y.assign(this.spawnPosU.y.add(r2.sub(0.5).mul(this.spawnSpreadU)));
+                p.z.assign(this.spawnPosU.z.add(r3.sub(0.5).mul(this.spawnSpreadU)));
+
+                // Velocity = dir * speed + random spread
+                v.x.assign(this.spawnDirU.x.add(r4.sub(0.5).mul(this.spawnSpreadU)).mul(this.spawnSpeedU));
+                v.y.assign(this.spawnDirU.y.add(r5.sub(0.5).mul(this.spawnSpreadU)).mul(this.spawnSpeedU));
+                v.z.assign(this.spawnDirU.z.add(r6.sub(0.5).mul(this.spawnSpreadU)).mul(this.spawnSpeedU));
+
+                // Life
+                const lifeVar = float(0.8).add(r1.mul(0.4));
+                l.x.assign(this.spawnLifeU.mul(lifeVar)); // life
+                l.y.assign(this.spawnLifeU.mul(lifeVar)); // maxLife
+                l.z.assign(this.spawnSizeU.mul(float(0.7).add(r2.mul(0.6)))); // size
+                l.w.assign(this.spawnGravityU); // gravity scale
+
+                // Color with slight variation
+                c.x.assign(this.spawnColorU.x.mul(float(0.8).add(r3.mul(0.4))));
+                c.y.assign(this.spawnColorU.y.mul(float(0.8).add(r4.mul(0.4))));
+                c.z.assign(this.spawnColorU.z.mul(float(0.8).add(r5.mul(0.4))));
+            });
+        })().compute(this.MAX_SPAWN);
+
+        // Update: physics + life decay
+        this.computeUpdate = Fn(() => {
+            const l = life.element(instanceIndex);
+            If(l.x.greaterThan(0), () => {
+                const p = positions.element(instanceIndex);
+                const v = velocities.element(instanceIndex);
+                p.addAssign(v.mul(dt));
+                v.y.subAssign(float(20).mul(l.w).mul(dt)); // gravity
+                v.mulAssign(float(0.97)); // drag
+                l.x.subAssign(dt); // decay
+            });
+        })().compute(POOL);
+    }
+
+    buildRenderer(scene) {
+        const material = new THREE.SpriteNodeMaterial();
+        material.transparent = true;
+        material.blending = THREE.AdditiveBlending;
+        material.depthWrite = false;
+
+        const instLife = this.life.element(instanceIndex);
+        const instColor = this.colors.element(instanceIndex);
+        const fadeT = instLife.x.div(instLife.y.max(0.001)).clamp(0, 1);
+        const alive = step(float(0.001), instLife.x);
+
+        material.positionNode = this.positions.toAttribute();
+        material.scaleNode = instLife.z.mul(alive).mul(fadeT);
+        material.colorNode = instColor;
+        material.opacityNode = fadeT.mul(fadeT).mul(alive).mul(0.9);
+
+        const sprite = new THREE.Sprite(material);
+        sprite.count = this.POOL_SIZE;
+        sprite.frustumCulled = false;
+        scene.add(sprite);
+    }
+
+    // Queue a spawn and return true. Caller must dispatch computeSpawn after.
+    emit(pos, dir, count, type) {
+        const presets = {
+            blood:     { speed: 8,  spread: 1.5, life: 0.8,  size: 0.5, color: [0.8, 0.05, 0.02], gravity: 1.2 },
+            muzzle:    { speed: 4,  spread: 0.4, life: 0.12, size: 0.2, color: [1.0, 0.9, 0.3],   gravity: 0 },
+            trail:     { speed: 0.3,spread: 0.08,life: 3.0,  size: 0.15,color: [1.0, 0.7, 0.2],   gravity: 0.0 },
+            explosion: { speed: 14, spread: 2.0, life: 1.2,  size: 0.7, color: [1.0, 0.5, 0.1],   gravity: 0.8 },
+            spark:     { speed: 20, spread: 0.8, life: 0.5,  size: 0.1, color: [1.0, 0.95, 0.6],  gravity: 0.3 },
+        };
+        const cfg = presets[type] || presets.muzzle;
+        count = Math.min(count, this.MAX_SPAWN);
+
+        // Pool overflow check
+        this.writeHead = this.writeHead % this.POOL_SIZE;
+        if (this.writeHead + count > this.POOL_SIZE) {
+            this.overflowCount++;
+            if (this.overflowCount % 100 === 1) {
+                console.info(`[Particles] Pool wraparound #${this.overflowCount} at writeHead=${this.writeHead}, pool=${this.POOL_SIZE}. Consider increasing pool size.`);
+            }
+        }
+
+        this.spawnBaseU.value = this.writeHead;
+        this.spawnCountU.value = count;
+        this.spawnPosU.value.copy(pos);
+        this.spawnDirU.value.copy(dir);
+        this.spawnSpeedU.value = cfg.speed;
+        this.spawnSpreadU.value = cfg.spread;
+        this.spawnLifeU.value = cfg.life;
+        this.spawnSizeU.value = cfg.size;
+        this.spawnColorU.value.set(cfg.color[0], cfg.color[1], cfg.color[2]);
+        this.spawnSeedU.value = performance.now() * 100 + this.writeHead;
+        this.spawnGravityU.value = cfg.gravity;
+
+        this.writeHead += count;
+    }
+}
+
+// ============================================================
+//  EXPLOSION SPHERE POOL (visual blast radius feedback)
+// ============================================================
+class ExplosionSpherePool {
+    constructor(scene, poolSize = 16) {
+        this.pool = [];
+        const geo = new THREE.SphereGeometry(1, 16, 12);
+        for (let i = 0; i < poolSize; i++) {
+            const mat = new THREE.MeshBasicMaterial({
+                color: 0xff8822,
+                transparent: true,
+                depthWrite: false,
+                blending: THREE.AdditiveBlending,
+            });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.visible = false;
+            scene.add(mesh);
+            this.pool.push({ mesh, mat, active: false, age: 0, duration: 0.35, maxRadius: 1 });
+        }
+        this.nextIdx = 0;
+    }
+    spawn(position, radius) {
+        const s = this.pool[this.nextIdx];
+        this.nextIdx = (this.nextIdx + 1) % this.pool.length;
+        s.mesh.position.copy(position);
+        s.maxRadius = radius;
+        s.age = 0;
+        s.active = true;
+        s.mesh.visible = true;
+        s.mesh.scale.setScalar(0.1);
+        s.mat.opacity = 0.35;
+    }
+    update(dt) {
+        for (const s of this.pool) {
+            if (!s.active) continue;
+            s.age += dt;
+            const t = Math.min(1, s.age / s.duration);
+            const ease = 1 - Math.pow(1 - t, 3); // ease-out cubic
+            s.mesh.scale.setScalar(s.maxRadius * ease);
+            s.mat.opacity = 0.35 * (1 - t);
+            if (t >= 1) { s.active = false; s.mesh.visible = false; }
+        }
+    }
+}
+
+// ============================================================
+//  PROJECTILE SYSTEM (CPU - small pool)
+// ============================================================
+class ProjectileSystem {
+    constructor(scene, terrain) {
+        this.scene = scene;
+        this.terrain = terrain;
+        this.POOL_SIZE = CFG.projectile.poolSize;
+        this.pool = [];
+        const geo = new THREE.SphereGeometry(CFG.projectile.size, 6, 6);
+        const mat = new THREE.MeshBasicMaterial({ color: 0xffdd44 });
+        for (let i = 0; i < this.POOL_SIZE; i++) {
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.visible = false;
+            scene.add(mesh);
+            this.pool.push({ mesh, pos: new THREE.Vector3(), prevPos: new THREE.Vector3(), vel: new THREE.Vector3(), active: false, life: 0, trailTimer: 0 });
+        }
+        this.nextIdx = 0;
+    }
+
+    fire(origin, direction) {
+        const p = this.pool[this.nextIdx];
+        this.nextIdx = (this.nextIdx + 1) % this.POOL_SIZE;
+        p.pos.copy(origin);
+        p.prevPos.copy(origin);
+        p.vel.copy(direction).multiplyScalar(CFG.projectile.speed);
+        p.active = true;
+        p.life = CFG.projectile.maxLife;
+        p.trailTimer = 0;
+        p.mesh.visible = true;
+        p.mesh.position.copy(origin);
+    }
+
+    update(dt, particles, renderer) {
+        const impacts = [];
+        const half = CFG.world.size * 0.48;
+        for (const p of this.pool) {
+            if (!p.active) continue;
+            // Save previous position for swept collision
+            p.prevPos.copy(p.pos);
+            // Physics
+            p.vel.y -= CFG.projectile.gravity * dt;
+            p.pos.addScaledVector(p.vel, dt);
+            p.mesh.position.copy(p.pos);
+            // Trail particles
+            p.trailTimer -= dt;
+            if (p.trailTimer <= 0) {
+                p.trailTimer = CFG.projectile.trailInterval;
+                particles.emit(p.pos, new THREE.Vector3(0, 0, 0), CFG.particles.trailCount, 'trail');
+                renderer.compute(particles.computeSpawn);
+            }
+            // Life timeout
+            p.life -= dt;
+            if (p.life <= 0) { p.active = false; p.mesh.visible = false; continue; }
+            // Terrain collision
+            const th = this.terrain.getHeight(p.pos.x, p.pos.z);
+            if (p.pos.y <= th) {
+                p.active = false; p.mesh.visible = false;
+                impacts.push(new THREE.Vector3(p.pos.x, th, p.pos.z));
+                continue;
+            }
+            // Out of bounds
+            if (Math.abs(p.pos.x) > half || Math.abs(p.pos.z) > half) { p.active = false; p.mesh.visible = false; }
+        }
+        return impacts;
+    }
+}
+
+// ============================================================
+//  PLAYER
+// ============================================================
+class Player {
+    constructor(camera, terrain) {
+        this.camera = camera;
+        this.terrain = terrain;
+        this.position = new THREE.Vector3(0, 0, 0);
+        this.velocity = new THREE.Vector3();
+        this.yaw = 0; this.pitch = 0;
+        this.grounded = false;
+        this.health = CFG.player.maxHealth;
+        this.keys = {};
+        this.mouseDX = 0; this.mouseDY = 0;
+        this.locked = false;
+        this.ammo = CFG.weapon.maxAmmo;
+        this.fireTimer = 0;
+        this.shooting = false;
+        this.position.set(0, this.terrain.getHeight(0, 0) + CFG.player.height, 0);
+        this.setupInput();
+        this.buildWeaponModel();
+    }
+
+    setupInput() {
+        document.addEventListener('keydown', e => { this.keys[e.code] = true; });
+        document.addEventListener('keyup', e => { this.keys[e.code] = false; });
+        document.addEventListener('mousemove', e => {
+            if (!this.locked) return;
+            this.mouseDX += e.movementX; this.mouseDY += e.movementY;
+        });
+        document.addEventListener('mousedown', e => { if (e.button === 0 && this.locked) this.shooting = true; });
+        document.addEventListener('mouseup', e => { if (e.button === 0) this.shooting = false; });
+    }
+
+    buildWeaponModel() {
+        this.weaponGroup = new THREE.Group();
+        const body = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.1, 0.35), new THREE.MeshLambertMaterial({ color: 0x333333 }));
+        body.position.set(0.2, -0.18, -0.35);
+        this.weaponGroup.add(body);
+        const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.04, 0.2), new THREE.MeshLambertMaterial({ color: 0x222222 }));
+        barrel.position.set(0.2, -0.14, -0.52);
+        this.weaponGroup.add(barrel);
+        this.muzzleFlash = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 6), new THREE.MeshBasicMaterial({ color: 0xffff44, transparent: true, opacity: 0 }));
+        this.muzzleFlash.position.set(0.2, -0.14, -0.65);
+        this.weaponGroup.add(this.muzzleFlash);
+        this.camera.add(this.weaponGroup);
+    }
+
+    update(dt) {
+        const sens = 0.002;
+        this.yaw -= this.mouseDX * sens;
+        this.pitch -= this.mouseDY * sens;
+        this.pitch = Math.max(-Math.PI/2 + 0.05, Math.min(Math.PI/2 - 0.05, this.pitch));
+        this.mouseDX = 0; this.mouseDY = 0;
+
+        const forward = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+        const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+        const move = new THREE.Vector3();
+        if (this.keys['KeyW']) move.add(forward);
+        if (this.keys['KeyS']) move.sub(forward);
+        if (this.keys['KeyA']) move.sub(right);
+        if (this.keys['KeyD']) move.add(right);
+        if (move.lengthSq() > 0) move.normalize();
+
+        let speed = CFG.player.walkSpeed;
+        if (this.keys['ShiftLeft'] || this.keys['ShiftRight']) speed *= CFG.player.sprintMult;
+
+        if (this.grounded && move.lengthSq() > 0) {
+            const normal = this.terrain.getNormal(this.position.x, this.position.z);
+            const slopeAngle = Math.acos(Math.min(1, normal.y));
+            const slopeDir = new THREE.Vector3(normal.x, 0, normal.z);
+            if (slopeDir.lengthSq() > 0.001) {
+                slopeDir.normalize();
+                const factor = 1 + move.dot(slopeDir) * Math.sin(slopeAngle) * CFG.player.slopeEffect;
+                speed *= Math.max(0.2, factor);
+            }
+        }
+
+        this.velocity.x = move.x * speed;
+        this.velocity.z = move.z * speed;
+        if (this.keys['Space'] && this.grounded) { this.velocity.y = CFG.player.jumpForce; this.grounded = false; }
+        this.velocity.y -= CFG.player.gravity * dt;
+        this.position.x += this.velocity.x * dt;
+        this.position.z += this.velocity.z * dt;
+        this.position.y += this.velocity.y * dt;
+
+        const groundH = this.terrain.getHeight(this.position.x, this.position.z) + CFG.player.height;
+        if (this.position.y <= groundH) { this.position.y = groundH; this.velocity.y = 0; this.grounded = true; }
+
+        const half = CFG.world.size * 0.48;
+        this.position.x = Math.max(-half, Math.min(half, this.position.x));
+        this.position.z = Math.max(-half, Math.min(half, this.position.z));
+
+        this.camera.position.copy(this.position);
+        this.camera.rotation.order = 'YXZ';
+        this.camera.rotation.set(this.pitch, this.yaw, 0);
+
+        if (this.grounded && move.lengthSq() > 0) {
+            const t = performance.now() / 1000;
+            this.weaponGroup.position.y = Math.sin(t * speed * 0.8) * 0.015;
+            this.weaponGroup.position.x = Math.cos(t * speed * 0.4) * 0.008;
+        } else { this.weaponGroup.position.y *= 0.9; this.weaponGroup.position.x *= 0.9; }
+
+        if (this.fireTimer > 0) this.fireTimer -= dt;
+        this.muzzleFlash.material.opacity *= 0.85;
+        if (this.muzzleFlash.material.opacity < 0.01) this.muzzleFlash.material.opacity = 0;
+    }
+
+    tryShoot() {
+        if (!this.shooting || this.fireTimer > 0 || this.ammo <= 0) return null;
+        this.fireTimer = 1 / CFG.weapon.fireRate;
+        this.ammo--;
+        this.muzzleFlash.material.opacity = 1;
+        this.pitch += 0.01;
+        this.weaponGroup.position.z = 0.04;
+        const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+        dir.x += (Math.random() - 0.5) * CFG.weapon.spread;
+        dir.y += (Math.random() - 0.5) * CFG.weapon.spread;
+        dir.normalize();
+        return { origin: this.camera.position.clone(), direction: dir };
+    }
+
+    reload() { this.ammo = CFG.weapon.maxAmmo; }
+
+    takeDamage(amount) {
+        this.health = Math.max(0, this.health - amount);
+        if (CFG.debug.damageFlash) {
+            document.getElementById('hit-flash').style.opacity = '1';
+            setTimeout(() => document.getElementById('hit-flash').style.opacity = '0', 100);
+        }
+    }
+}
+
+// ============================================================
+//  PICKUPS (CPU - small count)
+// ============================================================
+class Pickup {
+    constructor(scene, terrain, type, position) {
+        this.terrain = terrain; this.type = type; this.active = true; this.respawnTimer = 0;
+        const size = 0.6;
+        const color = type === 'health' ? 0x44ff44 : 0xffcc22;
+        const geo = type === 'health' ? new THREE.OctahedronGeometry(size * 0.6) : new THREE.BoxGeometry(size, size, size);
+        this.mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color, emissive: color, emissiveIntensity: 0.2 }));
+        this.mesh.position.copy(position);
+        this.baseY = terrain.getHeight(position.x, position.z) + 1.2;
+        this.mesh.position.y = this.baseY;
+        scene.add(this.mesh);
+    }
+    update(dt, playerPos) {
+        if (!this.active) { this.respawnTimer -= dt; if (this.respawnTimer <= 0) { this.active = true; this.mesh.visible = true; } return null; }
+        const t = performance.now() / 1000;
+        this.mesh.position.y = this.baseY + Math.sin(t * CFG.pickups.bobSpeed) * CFG.pickups.bobHeight;
+        this.mesh.rotation.y += dt * 2;
+        const dx = playerPos.x - this.mesh.position.x, dz = playerPos.z - this.mesh.position.z;
+        if (Math.sqrt(dx*dx + dz*dz) < 2.5) { this.active = false; this.mesh.visible = false; this.respawnTimer = CFG.pickups.respawnTime; return this.type; }
+        return null;
+    }
+}
+
+class PickupManager {
+    constructor(scene, terrain) { this.scene = scene; this.terrain = terrain; this.pickups = []; }
+    spawnAll() {
+        this.pickups.forEach(p => this.scene.remove(p.mesh));
+        this.pickups = [];
+        const half = CFG.world.size * 0.4;
+        for (let i = 0; i < CFG.pickups.healthCount; i++) { const x = (Math.random()-0.5)*half*2, z = (Math.random()-0.5)*half*2; this.pickups.push(new Pickup(this.scene, this.terrain, 'health', new THREE.Vector3(x,0,z))); }
+        for (let i = 0; i < CFG.pickups.ammoCount; i++) { const x = (Math.random()-0.5)*half*2, z = (Math.random()-0.5)*half*2; this.pickups.push(new Pickup(this.scene, this.terrain, 'ammo', new THREE.Vector3(x,0,z))); }
+    }
+    update(dt, player) {
+        for (const p of this.pickups) {
+            const r = p.update(dt, player.position);
+            if (r === 'health') player.health = Math.min(CFG.player.maxHealth, player.health + CFG.pickups.healthAmount);
+            else if (r === 'ammo') player.ammo = Math.min(CFG.weapon.maxAmmo, player.ammo + CFG.pickups.ammoAmount);
+        }
+    }
+}
+
+// ============================================================
+//  AUDIO ENGINE (Web Audio API + Three.js spatial)
+// ============================================================
+class AudioEngine {
+    constructor(camera) {
+        this.listener = new THREE.AudioListener();
+        camera.add(this.listener);
+        this.ctx = this.listener.context;
+
+        // Mixer chain: sources → category gain → master gain → destination
+        this.masterGain = this.ctx.createGain();
+        this.masterGain.gain.value = CFG.audio.masterVolume;
+        this.masterGain.connect(this.ctx.destination);
+
+        this.sfxGain = this.ctx.createGain();
+        this.sfxGain.gain.value = CFG.audio.sfxVolume;
+        this.sfxGain.connect(this.masterGain);
+
+        this.musicGain = this.ctx.createGain();
+        this.musicGain.gain.value = CFG.audio.musicVolume;
+        this.musicGain.connect(this.masterGain);
+
+        // Pre-generate reusable noise buffers
+        this._noiseBufs = {};
+        [0.05, 0.1, 0.3, 1.0].forEach(d => {
+            const len = Math.floor(this.ctx.sampleRate * d);
+            const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+            const data = buf.getChannelData(0);
+            for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+            this._noiseBufs[d] = buf;
+        });
+
+        // Distortion curve (shared)
+        this._distCurve = new Float32Array(256);
+        for (let i = 0; i < 256; i++) this._distCurve[i] = Math.tanh(((i / 128) - 1) * 3);
+
+        this.samples = {};
+        this.activeSounds = 0;
+        this.currentMusic = null;
+
+        // Resume on first interaction
+        const resume = () => { if (this.ctx.state === 'suspended') this.ctx.resume(); };
+        document.addEventListener('click', resume);
+        document.addEventListener('keydown', resume);
+    }
+
+    syncVolumes() {
+        this.masterGain.gain.value = CFG.audio.masterVolume;
+        this.sfxGain.gain.value = CFG.audio.sfxVolume;
+        this.musicGain.gain.value = CFG.audio.musicVolume;
+    }
+
+    // Create a 3D panner at a world position
+    _panner(pos) {
+        const p = this.ctx.createPanner();
+        p.panningModel = 'HRTF';
+        p.distanceModel = 'inverse';
+        p.refDistance = CFG.audio.spatialRefDist;
+        p.maxDistance = CFG.audio.spatialMaxDist;
+        p.rolloffFactor = CFG.audio.spatialRolloff;
+        p.setPosition(pos.x, pos.y, pos.z);
+        p.connect(this.sfxGain);
+        return p;
+    }
+
+    // Get a pre-generated noise buffer (closest match)
+    _noise(dur) {
+        const keys = Object.keys(this._noiseBufs).map(Number).sort((a,b) => a - b);
+        const best = keys.find(k => k >= dur) || keys[keys.length - 1];
+        return this._noiseBufs[best];
+    }
+
+    // Play a synth preset. pos=null → non-positional (player's own gun etc.)
+    play(preset, pos = null) {
+        if (this.activeSounds >= CFG.audio.maxSounds) return;
+        if (this.ctx.state === 'suspended') return;
+
+        const dest = pos ? this._panner(pos) : this.sfxGain;
+        const v = Math.random();
+        this.activeSounds++;
+
+        const done = (nodes, sec) => {
+            setTimeout(() => {
+                nodes.forEach(n => { try { n.disconnect(); } catch(e) {} });
+                if (pos) try { dest.disconnect(); } catch(e) {}
+                this.activeSounds--;
+            }, sec * 1000 + 50);
+        };
+
+        const synth = this['_' + preset];
+        if (synth) synth.call(this, dest, v, done);
+    }
+
+    // === SYNTH PRESETS ===
+
+    // Gunshot: noise crack + sawtooth thump + distortion
+    _gunshot(dest, v, done) {
+        const ctx = this.ctx, now = ctx.currentTime;
+
+        // Noise crack
+        const noise = ctx.createBufferSource();
+        noise.buffer = this._noise(0.1);
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.frequency.setValueAtTime(2500 + v * 3000, now);
+        filter.frequency.exponentialRampToValueAtTime(400, now + 0.06);
+        filter.Q.value = 1.5;
+        const dist = ctx.createWaveShaper();
+        dist.curve = this._distCurve;
+        const nGain = ctx.createGain();
+        nGain.gain.setValueAtTime(0.5, now);
+        nGain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+        noise.connect(filter); filter.connect(dist); dist.connect(nGain); nGain.connect(dest);
+
+        // Thump body
+        const osc = ctx.createOscillator();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(130 + v * 40, now);
+        osc.frequency.exponentialRampToValueAtTime(35, now + 0.06);
+        const oGain = ctx.createGain();
+        oGain.gain.setValueAtTime(0.35, now);
+        oGain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+        osc.connect(oGain); oGain.connect(dest);
+
+        // Snap transient (short high sine)
+        const snap = ctx.createOscillator();
+        snap.type = 'sine';
+        snap.frequency.setValueAtTime(4000 + v * 2000, now);
+        snap.frequency.exponentialRampToValueAtTime(1000, now + 0.015);
+        const sGain = ctx.createGain();
+        sGain.gain.setValueAtTime(0.15, now);
+        sGain.gain.exponentialRampToValueAtTime(0.001, now + 0.02);
+        snap.connect(sGain); sGain.connect(dest);
+
+        noise.start(now); noise.stop(now + 0.1);
+        osc.start(now); osc.stop(now + 0.08);
+        snap.start(now); snap.stop(now + 0.025);
+        done([noise, filter, dist, nGain, osc, oGain, snap, sGain], 0.15);
+    }
+
+    // Explosion: layered noise + deep bass + sub rumble
+    _explosion(dest, v, done) {
+        const ctx = this.ctx, now = ctx.currentTime;
+
+        // Noise body
+        const noise = ctx.createBufferSource();
+        noise.buffer = this._noise(1.0);
+        const filt = ctx.createBiquadFilter();
+        filt.type = 'lowpass';
+        filt.frequency.setValueAtTime(2500 + v * 1500, now);
+        filt.frequency.exponentialRampToValueAtTime(80, now + 0.7);
+        filt.Q.value = 3;
+        const nGain = ctx.createGain();
+        nGain.gain.setValueAtTime(0.0, now);
+        nGain.gain.linearRampToValueAtTime(0.5, now + 0.01);
+        nGain.gain.exponentialRampToValueAtTime(0.001, now + 0.9);
+        noise.connect(filt); filt.connect(nGain); nGain.connect(dest);
+
+        // Deep bass oscillator
+        const bass = ctx.createOscillator();
+        bass.type = 'sine';
+        bass.frequency.setValueAtTime(55 + v * 25, now);
+        bass.frequency.exponentialRampToValueAtTime(18, now + 0.5);
+        const bGain = ctx.createGain();
+        bGain.gain.setValueAtTime(0.6, now);
+        bGain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+        bass.connect(bGain); bGain.connect(dest);
+
+        // Sub rumble
+        const sub = ctx.createOscillator();
+        sub.type = 'sine';
+        sub.frequency.setValueAtTime(28 + v * 8, now);
+        sub.frequency.exponentialRampToValueAtTime(12, now + 0.35);
+        const sGain = ctx.createGain();
+        sGain.gain.setValueAtTime(0.5, now);
+        sGain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+        sub.connect(sGain); sGain.connect(dest);
+
+        // Mid crackle (distorted noise)
+        const crackle = ctx.createBufferSource();
+        crackle.buffer = this._noise(0.3);
+        const cDist = ctx.createWaveShaper();
+        cDist.curve = this._distCurve;
+        const cFilt = ctx.createBiquadFilter();
+        cFilt.type = 'bandpass';
+        cFilt.frequency.setValueAtTime(800 + v * 600, now);
+        cFilt.Q.value = 2;
+        const cGain = ctx.createGain();
+        cGain.gain.setValueAtTime(0.2, now);
+        cGain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+        crackle.connect(cDist); cDist.connect(cFilt); cFilt.connect(cGain); cGain.connect(dest);
+
+        noise.start(now); noise.stop(now + 1.0);
+        bass.start(now); bass.stop(now + 0.6);
+        sub.start(now); sub.stop(now + 0.4);
+        crackle.start(now); crackle.stop(now + 0.3);
+        done([noise, filt, nGain, bass, bGain, sub, sGain, crackle, cDist, cFilt, cGain], 1.1);
+    }
+
+    // Impact: short thud for projectile landing
+    _impact(dest, v, done) {
+        const ctx = this.ctx, now = ctx.currentTime;
+
+        const noise = ctx.createBufferSource();
+        noise.buffer = this._noise(0.05);
+        const nGain = ctx.createGain();
+        nGain.gain.setValueAtTime(0.25, now);
+        nGain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+        noise.connect(nGain); nGain.connect(dest);
+
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(180 + v * 120, now);
+        osc.frequency.exponentialRampToValueAtTime(50, now + 0.05);
+        const oGain = ctx.createGain();
+        oGain.gain.setValueAtTime(0.35, now);
+        oGain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+        osc.connect(oGain); oGain.connect(dest);
+
+        noise.start(now); noise.stop(now + 0.05);
+        osc.start(now); osc.stop(now + 0.08);
+        done([noise, nGain, osc, oGain], 0.1);
+    }
+
+    // Pickup: cheerful ascending tone
+    _pickup(dest, v, done) {
+        const ctx = this.ctx, now = ctx.currentTime;
+
+        const o1 = ctx.createOscillator();
+        o1.type = 'sine';
+        o1.frequency.setValueAtTime(600 + v * 100, now);
+        o1.frequency.linearRampToValueAtTime(900 + v * 100, now + 0.08);
+        const g1 = ctx.createGain();
+        g1.gain.setValueAtTime(0.2, now);
+        g1.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+        o1.connect(g1); g1.connect(dest);
+
+        const o2 = ctx.createOscillator();
+        o2.type = 'sine';
+        o2.frequency.setValueAtTime(900 + v * 100, now + 0.08);
+        o2.frequency.linearRampToValueAtTime(1200 + v * 100, now + 0.16);
+        const g2 = ctx.createGain();
+        g2.gain.setValueAtTime(0.0, now);
+        g2.gain.linearRampToValueAtTime(0.15, now + 0.08);
+        g2.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+        o2.connect(g2); g2.connect(dest);
+
+        o1.start(now); o1.stop(now + 0.15);
+        o2.start(now + 0.07); o2.stop(now + 0.2);
+        done([o1, g1, o2, g2], 0.25);
+    }
+
+    // === SAMPLE PLAYBACK ===
+
+    async loadSample(name, url) {
+        try {
+            const resp = await fetch(url);
+            const ab = await resp.arrayBuffer();
+            this.samples[name] = await this.ctx.decodeAudioData(ab);
+            console.info(`[Audio] Loaded sample "${name}" (${(this.samples[name].duration).toFixed(1)}s)`);
+        } catch (e) {
+            console.warn(`[Audio] Failed to load "${name}":`, e);
+        }
+    }
+
+    playSample(name, pos = null, opts = {}) {
+        const buffer = this.samples[name];
+        if (!buffer || this.activeSounds >= CFG.audio.maxSounds) return null;
+        if (this.ctx.state === 'suspended') return null;
+
+        const dest = pos ? this._panner(pos) : this.sfxGain;
+        const src = this.ctx.createBufferSource();
+        src.buffer = buffer;
+        if (opts.loop) src.loop = true;
+        if (opts.rate) src.playbackRate.value = opts.rate;
+
+        const gain = this.ctx.createGain();
+        gain.gain.value = opts.volume || 1;
+        src.connect(gain); gain.connect(dest);
+        src.start();
+
+        this.activeSounds++;
+        src.onended = () => {
+            try { src.disconnect(); gain.disconnect(); if (pos) dest.disconnect(); } catch(e) {}
+            this.activeSounds--;
+        };
+        return { source: src, gain };
+    }
+
+    playMusic(name, opts = {}) {
+        if (this.currentMusic) {
+            try { this.currentMusic.source.stop(); } catch(e) {}
+        }
+        const buffer = this.samples[name];
+        if (!buffer) return null;
+
+        const src = this.ctx.createBufferSource();
+        src.buffer = buffer;
+        src.loop = opts.loop !== false;
+        const gain = this.ctx.createGain();
+        gain.gain.value = opts.volume || 1;
+        src.connect(gain); gain.connect(this.musicGain);
+        src.start();
+
+        this.currentMusic = { source: src, gain };
+        src.onended = () => { if (this.currentMusic?.source === src) this.currentMusic = null; };
+        return this.currentMusic;
+    }
+
+    stopMusic(fadeTime = 1) {
+        if (!this.currentMusic) return;
+        const g = this.currentMusic.gain;
+        g.gain.setValueAtTime(g.gain.value, this.ctx.currentTime);
+        g.gain.linearRampToValueAtTime(0, this.ctx.currentTime + fadeTime);
+        const src = this.currentMusic.source;
+        setTimeout(() => { try { src.stop(); } catch(e) {} }, fadeTime * 1000 + 50);
+        this.currentMusic = null;
+    }
+}
+
+// ============================================================
+//  DEBUG OVERLAY
+// ============================================================
+class DebugOverlay {
+    constructor(game) {
+        this.game = game; this.visible = false;
+        this.el = document.getElementById('debug');
+        this.build();
+        document.addEventListener('keydown', e => {
+            if (e.code === 'Backquote') {
+                e.preventDefault();
+                this.visible = !this.visible;
+                this.el.style.display = this.visible ? 'block' : 'none';
+                const st = this.game.state;
+                if (this.visible) {
+                    if (document.pointerLockElement) document.exitPointerLock();
+                } else {
+                    // Only re-request pointer lock during states that use it
+                    if (st === 'playing' || st === 'pregame' || st === 'drop') {
+                        this.game.renderer.domElement.requestPointerLock();
+                    }
+                }
+            }
+        });
+    }
+    build() {
+        this.el.innerHTML = '';
+        const header = document.createElement('div'); header.className = 'debug-header';
+        header.innerHTML = `<span>DEBUG (WebGPU) - ${(ENEMY_COUNT/1000000).toFixed(1)}M enemies</span><span style="color:#666;font-size:11px">~</span>`;
+        this.el.appendChild(header);
+
+        this.statsEl = document.createElement('div'); this.statsEl.className = 'debug-stats'; this.el.appendChild(this.statsEl);
+
+        this.addSection('World', [
+            { key: 'world.size', label: 'World Size', min: 1000, max: 50000, step: 1000 },
+        ]);
+        this.addSection('Terrain', [
+            { key: 'terrain.seed', label: 'Seed', min: 1, max: 9999, step: 1 },
+            { key: 'terrain.octaves', label: 'Octaves', min: 1, max: 8, step: 1 },
+            { key: 'terrain.frequency', label: 'Frequency', min: 0.0005, max: 0.01, step: 0.0001 },
+            { key: 'terrain.amplitude', label: 'Amplitude', min: 10, max: 800, step: 10 },
+            { key: 'terrain.persistence', label: 'Persistence', min: 0.1, max: 0.9, step: 0.01 },
+            { key: 'terrain.offset', label: 'Offset', min: -50, max: 100, step: 1 },
+        ]);
+        this.addSection('Player', [
+            { key: 'player.walkSpeed', label: 'Walk Speed', min: 1, max: 30, step: 0.5 },
+            { key: 'player.sprintMult', label: 'Sprint Mult', min: 1, max: 4, step: 0.1 },
+            { key: 'player.jumpForce', label: 'Jump Force', min: 1, max: 30, step: 0.5 },
+            { key: 'player.gravity', label: 'Gravity', min: 5, max: 60, step: 0.5 },
+            { key: 'player.slopeEffect', label: 'Slope Effect', min: 0, max: 2, step: 0.1 },
+        ]);
+        this.addSection('Enemies (GPU)', [
+            { key: 'enemies.speed', label: 'Speed', min: 0.5, max: 20, step: 0.5 },
+            { key: 'enemies.health', label: 'Health', min: 10, max: 500, step: 10 },
+            { key: 'enemies.damage', label: 'Damage/sec', min: 1, max: 50, step: 1 },
+            { key: 'enemies.attackRange', label: 'Atk Range', min: 1, max: 15, step: 0.5 },
+            { key: 'enemies.size', label: 'Size', min: 0.3, max: 4, step: 0.1 },
+            { key: 'enemies.cullDistance', label: 'Cull Dist', min: 50, max: 5000, step: 50 },
+            { key: 'enemies.flowInfluence', label: 'Flow Influence', min: 0, max: 1, step: 0.05 },
+        ]);
+        this.addSection('Weapon', [
+            { key: 'weapon.damage', label: 'Damage', min: 1, max: 200, step: 1 },
+            { key: 'weapon.fireRate', label: 'Fire Rate', min: 1, max: 20, step: 0.5 },
+            { key: 'weapon.range', label: 'Range', min: 50, max: 1000, step: 10 },
+            { key: 'weapon.maxAmmo', label: 'Max Ammo', min: 5, max: 200, step: 5 },
+            { key: 'weapon.hitRadius', label: 'Hit Radius', min: 0.5, max: 5, step: 0.1 },
+        ]);
+        this.addSection('Particles', [
+            { key: 'particles.muzzleCount', label: 'Muzzle #', min: 0, max: 50, step: 1 },
+            { key: 'particles.trailCount', label: 'Trail #', min: 0, max: 200, step: 1 },
+            { key: 'particles.bloodCount', label: 'Blood #', min: 0, max: 100, step: 1 },
+            { key: 'particles.sparkCount', label: 'Spark #', min: 0, max: 50, step: 1 },
+        ]);
+        this.addSection('Projectile', [
+            { key: 'projectile.speed', label: 'Speed', min: 20, max: 300, step: 5 },
+            { key: 'projectile.gravity', label: 'Gravity', min: 0, max: 80, step: 1 },
+            { key: 'projectile.explosionRadius', label: 'Blast Radius', min: 5, max: 100, step: 1 },
+            { key: 'projectile.explosionForce', label: 'Blast Force', min: 5, max: 150, step: 1 },
+            { key: 'projectile.explosionDamage', label: 'Blast Damage', min: 0, max: 200, step: 5 },
+        ]);
+        this.addSection('Lighting', [
+            { key: 'lighting.sunIntensity', label: 'Sun', min: 0, max: 5, step: 0.1 },
+            { key: 'lighting.ambientIntensity', label: 'Ambient', min: 0, max: 2, step: 0.05 },
+            { key: 'lighting.fogNear', label: 'Fog Near', min: 50, max: 5000, step: 50 },
+            { key: 'lighting.fogFar', label: 'Fog Far', min: 100, max: 10000, step: 50 },
+        ]);
+        this.addSection('Flow Map', [
+            { key: 'flowMap.updateInterval', label: 'Update (s)', min: 0.05, max: 2, step: 0.05 },
+        ]);
+        this.addSection('Audio', [
+            { key: 'audio.masterVolume', label: 'Master', min: 0, max: 1, step: 0.05 },
+            { key: 'audio.sfxVolume', label: 'SFX', min: 0, max: 1, step: 0.05 },
+            { key: 'audio.musicVolume', label: 'Music', min: 0, max: 1, step: 0.05 },
+            { key: 'audio.spatialRefDist', label: 'Ref Distance', min: 1, max: 50, step: 1 },
+            { key: 'audio.spatialMaxDist', label: 'Max Distance', min: 50, max: 2000, step: 50 },
+            { key: 'audio.spatialRolloff', label: 'Rolloff', min: 0.1, max: 5, step: 0.1 },
+        ]);
+        this.addSection('Debug', [
+            { key: 'debug.godMode', label: 'God Mode', type: 'checkbox' },
+            { key: 'debug.damageFlash', label: 'Damage Flash', type: 'checkbox' },
+        ]);
+
+        // Buttons
+        const btns = document.createElement('div'); btns.style.padding = '12px 16px';
+        const mkBtn = (text, fn) => { const b = document.createElement('button'); b.className = 'debug-btn'; b.textContent = text; b.onclick = fn; btns.appendChild(b); };
+        mkBtn('Regen Terrain', () => this.game.regenerateTerrain());
+        mkBtn('Respawn Enemies', () => this.game.respawnEnemies());
+        mkBtn('Respawn Pickups', () => this.game.pickupManager.spawnAll());
+        mkBtn('Full Heal + Ammo', () => { this.game.player.health = CFG.player.maxHealth; this.game.player.ammo = CFG.weapon.maxAmmo; });
+        mkBtn('Teleport Center', () => { const g = this.game; g.player.position.set(0, g.terrain.getHeight(0,0)+CFG.player.height, 0); });
+        this.el.appendChild(btns);
+    }
+    addSection(title, params) {
+        const section = document.createElement('div'); section.className = 'debug-section';
+        const titleEl = document.createElement('div'); titleEl.className = 'debug-section-title';
+        titleEl.innerHTML = `<span>${title}</span><span>-</span>`;
+        const content = document.createElement('div'); content.className = 'debug-section-content';
+        let collapsed = false;
+        titleEl.onclick = () => { collapsed = !collapsed; content.style.display = collapsed ? 'none' : 'block'; titleEl.querySelector('span:last-child').textContent = collapsed ? '+' : '-'; };
+        for (const p of params) {
+            const row = document.createElement('div'); row.className = 'debug-row';
+            const label = document.createElement('label'); label.textContent = p.label; row.appendChild(label);
+            const [cat, key] = p.key.split('.');
+            if (p.type === 'checkbox') {
+                const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = CFG[cat][key];
+                cb.style.cssText = 'width:14px;height:14px;accent-color:#8af';
+                cb.addEventListener('change', () => { CFG[cat][key] = cb.checked; });
+                row.appendChild(cb);
+            } else {
+                const slider = document.createElement('input'); slider.type = 'range'; slider.min = p.min; slider.max = p.max; slider.step = p.step; slider.value = CFG[cat][key];
+                const val = document.createElement('span'); val.className = 'val'; val.textContent = Number(CFG[cat][key]).toFixed(p.step < 1 ? (p.step < 0.01 ? 4 : 2) : 0);
+                slider.addEventListener('input', () => { const v = parseFloat(slider.value); CFG[cat][key] = v; val.textContent = v.toFixed(p.step < 1 ? (p.step < 0.01 ? 4 : 2) : 0); });
+                row.appendChild(slider); row.appendChild(val);
+            }
+            content.appendChild(row);
+        }
+        section.appendChild(titleEl); section.appendChild(content); this.el.appendChild(section);
+    }
+    updateStats(fps, player) {
+        this.statsEl.innerHTML =
+            `FPS: ${fps} | Enemies: ${(ENEMY_COUNT/1000000).toFixed(1)}M (GPU)<br>` +
+            `Pos: ${player.position.x.toFixed(0)}, ${player.position.y.toFixed(0)}, ${player.position.z.toFixed(0)} | ` +
+            `HP: ${player.health.toFixed(0)} | Ammo: ${player.ammo}`;
+    }
+}
+
+// ============================================================
+//  GAME STATES
+// ============================================================
+const STATES = {
+    attract: {
+        enter(game) {
+            game.setActiveCamera(game.attractCamera);
+            document.getElementById('menu-overlay').style.display = 'flex';
+            document.getElementById('pregame-overlay').style.display = 'none';
+            document.getElementById('gameover-overlay').style.display = 'none';
+            document.getElementById('blocker').style.display = 'none';
+            document.getElementById('hud').style.display = 'none';
+            game.player.weaponGroup.visible = false;
+            game.player.locked = false;
+            game.player.shooting = false;
+            if (document.pointerLockElement) document.exitPointerLock();
+            game.attractTime = game.attractTime || 0;
+            // Close any open menu panels
+            document.querySelectorAll('.menu-panel').forEach(p => p.style.display = 'none');
+        },
+        update(dt, game) {
+            game.attractAngle += dt * 0.05;
+            game.attractTime += dt;
+            const radius = 600;
+            const x = Math.cos(game.attractAngle) * radius;
+            const z = Math.sin(game.attractAngle) * radius;
+            const baseY = game.terrain.getHeight(x, z);
+            const y = Math.max(baseY + 60, 220) + Math.sin(game.attractTime * 0.15) * 30;
+            game.attractCamera.position.set(x, y, z);
+            const lookX = Math.sin(game.attractTime * 0.3) * 200;
+            const lookZ = Math.cos(game.attractTime * 0.2) * 200;
+            game.attractCamera.lookAt(lookX, 50, lookZ);
+            // Keep particles alive in attract (subtle ambiance)
+            game.particles.dtU.value = dt;
+            game.renderer.compute(game.particles.computeUpdate);
+        },
+        exit(game) {
+            document.getElementById('menu-overlay').style.display = 'none';
+        }
+    },
+
+    pregame: {
+        enter(game) {
+            game.setActiveCamera(game.camera);
+            game.player.weaponGroup.visible = true;
+            game.player.position.set(0, 400, 0);
+            game.player.pitch = -Math.PI / 2;
+            game.player.yaw = 0;
+            game.player.velocity.set(0, 0, 0);
+            game.player.grounded = false;
+            game.player.health = CFG.player.maxHealth;
+            game.player.ammo = CFG.weapon.maxAmmo;
+            game.player.fireTimer = 0;
+            game.player.shooting = false;
+            game.roundStats = { survivalTime: 0, kills: 0, shotsFired: 0 };
+            game.killEstimate = 0;
+            game.damageTimer = 0;
+            game.renderer.computeAsync(game.enemies.computeInit);
+            document.getElementById('pregame-overlay').style.display = 'flex';
+            document.getElementById('gameover-overlay').style.display = 'none';
+            document.getElementById('blocker').style.display = 'none';
+            document.getElementById('hud').style.display = 'none';
+            game.camera.position.copy(game.player.position);
+            game.camera.rotation.order = 'YXZ';
+            game.camera.rotation.set(game.player.pitch, game.player.yaw, 0);
+            game.renderer.domElement.requestPointerLock();
+        },
+        update(dt, game) {
+            // Mouse look only
+            if (game.player.locked) {
+                const sens = 0.002;
+                game.player.yaw -= game.player.mouseDX * sens;
+                game.player.pitch -= game.player.mouseDY * sens;
+                game.player.pitch = Math.max(-Math.PI/2 + 0.05, Math.min(Math.PI/2 - 0.05, game.player.pitch));
+            }
+            game.player.mouseDX = 0;
+            game.player.mouseDY = 0;
+            game.camera.position.copy(game.player.position);
+            game.camera.rotation.set(game.player.pitch, game.player.yaw, 0);
+            // Particles keep updating
+            game.particles.dtU.value = dt;
+            game.renderer.compute(game.particles.computeUpdate);
+            // Fire → drop
+            if (game.player.shooting) {
+                game.setState('drop');
+            }
+        },
+        exit(game) {
+            document.getElementById('pregame-overlay').style.display = 'none';
+        }
+    },
+
+    drop: {
+        enter(game) {
+            game.dropStartY = game.player.position.y;
+            game.player.shooting = false;
+            document.getElementById('hud').style.display = 'block';
+        },
+        update(dt, game) {
+            const dropSpeed = 150;
+            game.player.position.y -= dropSpeed * dt;
+            // Trail particles
+            game.particles.emit(game.player.position, new THREE.Vector3(0, 1, 0), 30, 'trail');
+            game.renderer.compute(game.particles.computeSpawn);
+            // Lerp pitch toward horizon
+            const terrainH = game.terrain.getHeight(game.player.position.x, game.player.position.z);
+            const groundY = terrainH + CFG.player.height;
+            const totalDrop = game.dropStartY - groundY;
+            const progress = totalDrop > 0 ? 1 - Math.max(0, (game.player.position.y - groundY) / totalDrop) : 1;
+            game.player.pitch = -Math.PI / 2 * (1 - Math.pow(progress, 0.6));
+            // Sync camera
+            game.camera.position.copy(game.player.position);
+            game.camera.rotation.set(game.player.pitch, game.player.yaw, 0);
+            // Update enemies (they're moving below)
+            game.enemies.syncUniforms(dt, game.player.position, game.camera.position);
+            game.enemies.updateDensity(dt, game.renderer);
+            game.renderer.compute(game.enemies.computeUpdate);
+            // Update particles + explosion spheres
+            game.particles.dtU.value = dt;
+            game.renderer.compute(game.particles.computeUpdate);
+            game.explosionSpheres.update(dt);
+            // Landing check
+            if (game.player.position.y <= groundY) {
+                game.player.position.y = groundY;
+                game.player.grounded = true;
+                game.player.velocity.set(0, 0, 0);
+                game.player.pitch = 0;
+                game.camera.position.copy(game.player.position);
+                game.camera.rotation.set(0, game.player.yaw, 0);
+                // BIG landing explosion
+                const landPos = game.player.position.clone();
+                game.enemies.explosionPosU.value.copy(landPos);
+                game.enemies.explosionRadiusU.value = 60;
+                game.enemies.explosionForceU.value = 80;
+                game.enemies.explosionDamageU.value = 30;
+                game.renderer.compute(game.enemies.computeExplosion);
+                // Massive explosion particles
+                const up = new THREE.Vector3(0, 1, 0);
+                game.particles.emit(landPos, up, 80, 'explosion');
+                game.renderer.compute(game.particles.computeSpawn);
+                game.particles.emit(landPos, up, 50, 'spark');
+                game.renderer.compute(game.particles.computeSpawn);
+                // Landing explosion sphere (big!)
+                game.explosionSpheres.spawn(landPos, 60);
+                // Non-positional boom (we ARE the epicenter)
+                game.audio.play('explosion');
+                // Screen shake
+                game.shakeTimer = 0.4;
+                game.setState('playing');
+            }
+        },
+        exit(game) {}
+    },
+
+    playing: {
+        enter(game) {
+            game.player.locked = true;
+            game.player.shooting = false;
+            document.getElementById('hud').style.display = 'block';
+            document.getElementById('blocker').style.display = 'none';
+            document.getElementById('gameover-overlay').style.display = 'none';
+            game.pickupManager.spawnAll();
+        },
+        update(dt, game) {
+            // Paused (pointer lock lost via Esc or debug panel)
+            if (!game.player.locked) return;
+            game.player.update(dt);
+            // Screen shake
+            if (game.shakeTimer > 0) {
+                game.shakeTimer -= dt;
+                const intensity = game.shakeTimer * 8;
+                game.camera.rotation.x += (Math.random() - 0.5) * 0.02 * intensity;
+                game.camera.rotation.y += (Math.random() - 0.5) * 0.02 * intensity;
+            }
+            // GPU enemies
+            game.enemies.syncUniforms(dt, game.player.position, game.camera.position);
+            game.enemies.updateDensity(dt, game.renderer);
+            game.renderer.compute(game.enemies.computeUpdate);
+            // Shooting
+            const shot = game.player.tryShoot();
+            if (shot) {
+                game.roundStats.shotsFired++;
+                const muzzlePos = shot.origin.clone().add(shot.direction.clone().multiplyScalar(1.5));
+                game.particles.emit(muzzlePos, shot.direction, CFG.particles.muzzleCount, 'muzzle');
+                game.renderer.compute(game.particles.computeSpawn);
+                game.projectiles.fire(muzzlePos, shot.direction);
+                game.audio.play('gunshot');
+            }
+            // --- Helper: trigger explosion at a point ---
+            const triggerExplosion = (impactPos) => {
+                const upDir = new THREE.Vector3(0, 1, 0);
+                game.particles.emit(impactPos, upDir, CFG.particles.explosionCount, 'explosion');
+                game.renderer.compute(game.particles.computeSpawn);
+                game.particles.emit(impactPos, upDir, CFG.particles.explosionSparkCount, 'spark');
+                game.renderer.compute(game.particles.computeSpawn);
+                game.enemies.explosionPosU.value.copy(impactPos);
+                game.enemies.explosionRadiusU.value = CFG.projectile.explosionRadius;
+                game.enemies.explosionForceU.value = CFG.projectile.explosionForce;
+                game.enemies.explosionDamageU.value = CFG.projectile.explosionDamage;
+                game.renderer.compute(game.enemies.computeExplosion);
+                game.explosionSpheres.spawn(impactPos, CFG.projectile.explosionRadius);
+                game.killEstimate += 3;
+                game.roundStats.kills += 3;
+                game.audio.play('explosion', impactPos);
+                // Self-knockback (no damage)
+                const toPlayer = game.player.position.clone().sub(impactPos);
+                const playerDist = toPlayer.length();
+                if (playerDist < CFG.projectile.explosionRadius * 1.5) {
+                    const falloff = 1 - Math.min(1, playerDist / (CFG.projectile.explosionRadius * 1.5));
+                    const knockForce = CFG.projectile.explosionForce * 0.6 * falloff;
+                    if (playerDist > 0.5) toPlayer.normalize();
+                    game.player.velocity.x += toPlayer.x * knockForce;
+                    game.player.velocity.z += toPlayer.z * knockForce;
+                    game.player.velocity.y += knockForce * 0.5;
+                    game.player.grounded = false;
+                }
+            };
+            // Mid-air hits from GPU collision (previous frame)
+            const gpuHits = game.enemies.consumeHits();
+            for (const idx of gpuHits) {
+                const p = game.projectiles.pool[idx];
+                if (p.active) {
+                    const hitPos = p.pos.clone();
+                    p.active = false;
+                    p.mesh.visible = false;
+                    triggerExplosion(hitPos);
+                }
+            }
+            // Terrain impacts (ground collision)
+            const impacts = game.projectiles.update(dt, game.particles, game.renderer);
+            for (const impactPos of impacts) {
+                triggerExplosion(impactPos);
+            }
+            // Upload projectile positions + run GPU collision (readback happens after render in animate)
+            game.enemies.uploadProjectilePositions(game.projectiles.pool);
+            game.enemies.runProjectileCollision(game.renderer);
+            // Particles
+            game.particles.dtU.value = dt;
+            game.renderer.compute(game.particles.computeUpdate);
+            // Explosion spheres
+            game.explosionSpheres.update(dt);
+            // Pickups
+            const prevHP = game.player.health, prevAmmo = game.player.ammo;
+            game.pickupManager.update(dt, game.player);
+            if (game.player.health > prevHP || game.player.ammo > prevAmmo) {
+                game.audio.play('pickup');
+            }
+            // Audio sync
+            game.audio.syncVolumes();
+            // Enemy damage
+            if (!CFG.debug.godMode) {
+                game.damageTimer -= dt;
+                if (game.damageTimer <= 0) {
+                    game.damageTimer = CFG.enemies.attackRate;
+                    game.player.takeDamage(CFG.enemies.damage);
+                }
+            }
+            // Lighting
+            game.sunLight.intensity = CFG.lighting.sunIntensity;
+            game.sunLight.position.set(CFG.lighting.sunX, CFG.lighting.sunY, CFG.lighting.sunZ).normalize().multiplyScalar(400);
+            game.ambientLight.intensity = CFG.lighting.ambientIntensity;
+            game.scene.fog.near = CFG.lighting.fogNear;
+            game.scene.fog.far = CFG.lighting.fogFar;
+            game.sunLight.target.position.copy(game.player.position);
+            game.sunLight.target.updateMatrixWorld();
+            game.sunLight.position.copy(game.player.position).add(
+                new THREE.Vector3(CFG.lighting.sunX, CFG.lighting.sunY, CFG.lighting.sunZ).normalize().multiplyScalar(200)
+            );
+            // Damage overlay
+            if (CFG.debug.damageFlash) {
+                const dmg = Math.max(0, 1 - game.player.health / CFG.player.maxHealth) * 0.6;
+                document.getElementById('damage-overlay').style.boxShadow = `inset 0 0 ${60 + dmg * 80}px rgba(255,0,0,${dmg})`;
+            } else {
+                document.getElementById('damage-overlay').style.boxShadow = 'none';
+            }
+            // Round stats
+            game.roundStats.survivalTime += dt;
+            // Death → game over
+            if (game.player.health <= 0) {
+                game.setState('gameover');
+            }
+        },
+        exit(game) {}
+    },
+
+    gameover: {
+        enter(game) {
+            if (document.pointerLockElement) document.exitPointerLock();
+            game.player.locked = false;
+            game.player.shooting = false;
+            const overlay = document.getElementById('gameover-overlay');
+            overlay.style.display = 'flex';
+            document.getElementById('hud').style.display = 'none';
+            document.getElementById('blocker').style.display = 'none';
+            // Populate stats
+            const mins = Math.floor(game.roundStats.survivalTime / 60);
+            const secs = Math.floor(game.roundStats.survivalTime % 60);
+            const timeStr = `${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
+            overlay.querySelector('.go-stats').innerHTML =
+                `Time Survived: <span>${timeStr}</span><br>` +
+                `Enemies Killed: <span>~${game.roundStats.kills.toLocaleString()}</span><br>` +
+                `Shots Fired: <span>${game.roundStats.shotsFired}</span>`;
+            game.saveHighScore(game.roundStats);
+            game.goTime = 0;
+            game.goCamStart = game.camera.position.clone();
+        },
+        update(dt, game) {
+            game.goTime += dt;
+            game.camera.position.y = game.goCamStart.y + game.goTime * 2;
+            game.camera.rotation.x -= dt * 0.02;
+            // Keep particles decaying
+            game.particles.dtU.value = dt;
+            game.renderer.compute(game.particles.computeUpdate);
+        },
+        exit(game) {
+            document.getElementById('gameover-overlay').style.display = 'none';
+            document.getElementById('damage-overlay').style.boxShadow = 'none';
+        }
+    }
+};
+
+// ============================================================
+//  GAME (async WebGPU init)
+// ============================================================
+class Game {
+    constructor() {
+        this.clock = new THREE.Clock();
+        this.fpsFrames = 0; this.fpsTime = 0; this.fpsDisplay = 0;
+        this.damageTimer = 0;
+        this.killEstimate = 0;
+        this.state = null;
+        this.roundStats = { survivalTime: 0, kills: 0, shotsFired: 0 };
+        this.attractAngle = 0;
+        this.attractTime = 0;
+        this.shakeTimer = 0;
+        this.goTime = 0;
+        this.goCamStart = new THREE.Vector3();
+        this._activeCamera = null;
+    }
+
+    async init() {
+        const status = document.getElementById('load-status');
+
+        // Renderer
+        status.textContent = 'Creating WebGPU renderer...';
+        this.renderer = new THREE.WebGPURenderer({ antialias: true });
+        this.renderer.setSize(window.innerWidth, window.innerHeight);
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.renderer.setClearColor(new THREE.Color(CFG.lighting.fogColor));
+        document.body.appendChild(this.renderer.domElement);
+
+        status.textContent = 'Initializing WebGPU...';
+        await this.renderer.init();
+
+        // Scene
+        this.scene = new THREE.Scene();
+        this.scene.fog = new THREE.Fog(new THREE.Color(CFG.lighting.fogColor), CFG.lighting.fogNear, CFG.lighting.fogFar);
+
+        // Player camera
+        this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 15000);
+        this.scene.add(this.camera);
+
+        // Attract camera (separate, not attached to player)
+        this.attractCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 15000);
+        this.scene.add(this.attractCamera);
+        this._activeCamera = this.camera;
+
+        // Lighting
+        this.ambientLight = new THREE.AmbientLight(0x7799bb, CFG.lighting.ambientIntensity);
+        this.scene.add(this.ambientLight);
+        this.sunLight = new THREE.DirectionalLight(0xffeedd, CFG.lighting.sunIntensity);
+        this.sunLight.position.set(CFG.lighting.sunX, CFG.lighting.sunY, CFG.lighting.sunZ).normalize().multiplyScalar(400);
+        this.scene.add(this.sunLight);
+        this.hemiLight = new THREE.HemisphereLight(0x88bbff, 0x445522, 0.3);
+        this.scene.add(this.hemiLight);
+
+        // Terrain
+        status.textContent = 'Generating terrain...';
+        this.terrain = new Terrain(this.scene);
+
+        // Player
+        this.player = new Player(this.camera, this.terrain);
+
+        // Player shadow
+        const pShadowGeo = new THREE.CircleGeometry(0.7, 12);
+        pShadowGeo.rotateX(-Math.PI / 2);
+        this.playerShadow = new THREE.Mesh(pShadowGeo,
+            new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35, depthWrite: false }));
+        this.scene.add(this.playerShadow);
+
+        // Audio (attached to player camera, will be moved via setActiveCamera)
+        status.textContent = 'Initializing audio engine...';
+        this.audio = new AudioEngine(this.camera);
+
+        // GPU Enemies
+        status.textContent = `Initializing ${(ENEMY_COUNT/1000000).toFixed(1)}M enemies on GPU...`;
+        this.enemies = new GPUEnemySystem(this.scene, this.terrain);
+        await this.renderer.computeAsync(this.enemies.computeInit);
+
+        // GPU Particles
+        status.textContent = 'Initializing particle system...';
+        this.particles = new GPUParticleSystem(this.scene);
+        await this.renderer.computeAsync(this.particles.computeInit);
+
+        // Projectiles (CPU)
+        status.textContent = 'Setting up projectiles...';
+        this.projectiles = new ProjectileSystem(this.scene, this.terrain);
+
+        // Explosion spheres (visual blast radius feedback)
+        this.explosionSpheres = new ExplosionSpherePool(this.scene);
+
+        // Pickups
+        this.pickupManager = new PickupManager(this.scene, this.terrain);
+        this.pickupManager.spawnAll();
+
+        // Build overlay DOM
+        this.buildMenuOverlay();
+        this.buildPregameOverlay();
+        this.buildGameOverOverlay();
+
+        // Debug
+        this.debug = new DebugOverlay(this);
+
+        // Pointer lock + events
+        this.setupPointerLock();
+        window.addEventListener('resize', () => this.onResize());
+        document.addEventListener('keydown', e => { if (e.code === 'KeyR' && this.player.locked) this.player.reload(); });
+
+        // Hide blocker, start in attract mode
+        document.getElementById('blocker').style.display = 'none';
+        this.setState('attract');
+
+        // Start loop
+        this.renderer.setAnimationLoop(() => this.animate());
+    }
+
+    setupPointerLock() {
+        const blocker = document.getElementById('blocker');
+        // Blocker click → resume playing (only relevant in PLAYING pause state)
+        blocker.addEventListener('click', () => {
+            if (this.state === 'playing' || this.state === 'pregame' || this.state === 'drop') {
+                this.renderer.domElement.requestPointerLock();
+            }
+        });
+        document.addEventListener('pointerlockchange', () => {
+            const locked = document.pointerLockElement === this.renderer.domElement;
+            this.player.locked = locked;
+            // In active game states, show blocker when pointer lock lost (pause)
+            if (this.state === 'playing' || this.state === 'pregame' || this.state === 'drop') {
+                if (this.debug && this.debug.visible) {
+                    blocker.style.display = 'none';
+                } else if (!locked) {
+                    blocker.style.display = 'flex';
+                    document.querySelector('#blocker h1').textContent = 'PAUSED';
+                    document.getElementById('load-status').textContent = 'Click to resume';
+                } else {
+                    blocker.style.display = 'none';
+                }
+            }
+        });
+    }
+
+    onResize() {
+        const aspect = window.innerWidth / window.innerHeight;
+        this.camera.aspect = aspect;
+        this.camera.updateProjectionMatrix();
+        this.attractCamera.aspect = aspect;
+        this.attractCamera.updateProjectionMatrix();
+        this.renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    setState(name) {
+        if (this.state && STATES[this.state] && STATES[this.state].exit) STATES[this.state].exit(this);
+        this.state = name;
+        if (STATES[name] && STATES[name].enter) STATES[name].enter(this);
+    }
+
+    setActiveCamera(cam) {
+        if (this.audio && this.audio.listener) {
+            if (this._activeCamera) this._activeCamera.remove(this.audio.listener);
+            cam.add(this.audio.listener);
+        }
+        this._activeCamera = cam;
+    }
+
+    buildMenuOverlay() {
+        const el = document.getElementById('menu-overlay');
+        el.innerHTML = '';
+        // Title
+        const title = document.createElement('div');
+        title.className = 'menu-title';
+        title.textContent = 'MILLION:1';
+        el.appendChild(title);
+        const sub = document.createElement('div');
+        sub.className = 'menu-subtitle';
+        sub.textContent = 'ONE MILLION ENEMIES';
+        el.appendChild(sub);
+        // Buttons container
+        const btns = document.createElement('div');
+        btns.style.cssText = 'display:flex;flex-direction:column;align-items:center';
+        const mkBtn = (text, fn) => {
+            const b = document.createElement('button');
+            b.className = 'menu-btn';
+            b.textContent = text;
+            b.onclick = fn;
+            btns.appendChild(b);
+        };
+        mkBtn('START GAME', () => this.setState('pregame'));
+        mkBtn('HIGH SCORES', () => this.showPanel('scores-panel'));
+        mkBtn('SETTINGS', () => this.showPanel('settings-panel'));
+        mkBtn('HELP', () => this.showPanel('help-panel'));
+        mkBtn('DONATE', () => this.showPanel('donate-panel'));
+        el.appendChild(btns);
+
+        // High Scores panel
+        const scoresPanel = document.createElement('div');
+        scoresPanel.className = 'menu-panel';
+        scoresPanel.id = 'scores-panel';
+        scoresPanel.innerHTML = '<h2>HIGH SCORES</h2><div class="scores-list"></div>';
+        const scoresBack = document.createElement('button');
+        scoresBack.className = 'menu-btn back-btn';
+        scoresBack.textContent = 'BACK';
+        scoresBack.onclick = () => scoresPanel.style.display = 'none';
+        scoresPanel.appendChild(scoresBack);
+        el.appendChild(scoresPanel);
+
+        // Settings panel
+        const settingsPanel = document.createElement('div');
+        settingsPanel.className = 'menu-panel';
+        settingsPanel.id = 'settings-panel';
+        settingsPanel.innerHTML = '<h2>SETTINGS</h2>';
+        const addSlider = (label, key, min, max, step) => {
+            const row = document.createElement('div');
+            row.className = 'debug-row';
+            const lbl = document.createElement('label');
+            lbl.textContent = label;
+            row.appendChild(lbl);
+            const [cat, k] = key.split('.');
+            const slider = document.createElement('input');
+            slider.type = 'range'; slider.min = min; slider.max = max; slider.step = step; slider.value = CFG[cat][k];
+            const val = document.createElement('span');
+            val.className = 'val';
+            val.textContent = Number(CFG[cat][k]).toFixed(step < 1 ? 2 : 0);
+            slider.addEventListener('input', () => {
+                const v = parseFloat(slider.value);
+                CFG[cat][k] = v;
+                val.textContent = v.toFixed(step < 1 ? 2 : 0);
+                if (this.audio) this.audio.syncVolumes();
+            });
+            row.appendChild(slider);
+            row.appendChild(val);
+            settingsPanel.appendChild(row);
+        };
+        addSlider('Master Volume', 'audio.masterVolume', 0, 1, 0.05);
+        addSlider('SFX Volume', 'audio.sfxVolume', 0, 1, 0.05);
+        addSlider('Music Volume', 'audio.musicVolume', 0, 1, 0.05);
+        const settingsBack = document.createElement('button');
+        settingsBack.className = 'menu-btn back-btn';
+        settingsBack.textContent = 'BACK';
+        settingsBack.onclick = () => settingsPanel.style.display = 'none';
+        settingsPanel.appendChild(settingsBack);
+        el.appendChild(settingsPanel);
+
+        // Help panel
+        const helpPanel = document.createElement('div');
+        helpPanel.className = 'menu-panel';
+        helpPanel.id = 'help-panel';
+        helpPanel.innerHTML = `<h2>CONTROLS</h2>
+            <p>WASD — Move</p><p>SHIFT — Sprint</p><p>SPACE — Jump</p>
+            <p>MOUSE — Look around</p><p>CLICK — Shoot</p><p>R — Reload</p>
+            <p>~ — Debug panel</p><p>ESC — Release cursor</p>
+            <p style="margin-top:16px;color:#666">Survive against one million GPU-computed enemies. Shoot the ground to send them flying!</p>`;
+        const helpBack = document.createElement('button');
+        helpBack.className = 'menu-btn back-btn';
+        helpBack.textContent = 'BACK';
+        helpBack.onclick = () => helpPanel.style.display = 'none';
+        helpPanel.appendChild(helpBack);
+        el.appendChild(helpPanel);
+
+        // Donate panel
+        const donatePanel = document.createElement('div');
+        donatePanel.className = 'menu-panel';
+        donatePanel.id = 'donate-panel';
+        donatePanel.innerHTML = `<h2>DONATE</h2><p>If you enjoy this game, consider supporting its development!</p><p style="color:#8af;margin-top:12px">Coming soon...</p>`;
+        const donateBack = document.createElement('button');
+        donateBack.className = 'menu-btn back-btn';
+        donateBack.textContent = 'BACK';
+        donateBack.onclick = () => donatePanel.style.display = 'none';
+        donatePanel.appendChild(donateBack);
+        el.appendChild(donatePanel);
+    }
+
+    showPanel(id) {
+        document.querySelectorAll('.menu-panel').forEach(p => p.style.display = 'none');
+        const panel = document.getElementById(id);
+        if (panel) {
+            panel.style.display = 'block';
+            if (id === 'scores-panel') this.populateScores();
+        }
+    }
+
+    buildPregameOverlay() {
+        const el = document.getElementById('pregame-overlay');
+        el.innerHTML = `
+            <div class="drop-text">CLICK TO DROP</div>
+            <div class="drop-sub">WASD move · SHIFT sprint · SPACE jump · R reload</div>
+        `;
+    }
+
+    buildGameOverOverlay() {
+        const el = document.getElementById('gameover-overlay');
+        el.innerHTML = '';
+        const title = document.createElement('div');
+        title.className = 'go-title';
+        title.textContent = 'GAME OVER';
+        el.appendChild(title);
+        const stats = document.createElement('div');
+        stats.className = 'go-stats';
+        el.appendChild(stats);
+        const buttons = document.createElement('div');
+        buttons.className = 'go-buttons';
+        const mkBtn = (text, fn) => {
+            const b = document.createElement('button');
+            b.className = 'menu-btn';
+            b.textContent = text;
+            b.onclick = fn;
+            buttons.appendChild(b);
+        };
+        mkBtn('PLAY AGAIN', () => this.setState('pregame'));
+        mkBtn('MAIN MENU', () => this.setState('attract'));
+        el.appendChild(buttons);
+    }
+
+    saveHighScore(stats) {
+        try {
+            const scores = this.getHighScores();
+            scores.push({ time: stats.survivalTime, kills: stats.kills, shots: stats.shotsFired, date: Date.now() });
+            scores.sort((a, b) => b.time - a.time);
+            localStorage.setItem('fps_highscores', JSON.stringify(scores.slice(0, 10)));
+        } catch (e) { /* localStorage not available */ }
+    }
+
+    getHighScores() {
+        try {
+            return JSON.parse(localStorage.getItem('fps_highscores') || '[]');
+        } catch (e) { return []; }
+    }
+
+    populateScores() {
+        const list = document.querySelector('.scores-list');
+        if (!list) return;
+        const scores = this.getHighScores();
+        if (scores.length === 0) {
+            list.innerHTML = '<p style="color:#666">No scores yet. Play a round!</p>';
+            return;
+        }
+        list.innerHTML = scores.map((s, i) => {
+            const mins = Math.floor(s.time / 60);
+            const secs = Math.floor(s.time % 60);
+            return `<p class="score-row">${i + 1}. <span>${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}</span> — ${s.kills} kills — ${s.shots} shots</p>`;
+        }).join('');
+    }
+
+    async regenerateTerrain() {
+        this.terrain.generate();
+        this.player.position.y = this.terrain.getHeight(this.player.position.x, this.player.position.z) + CFG.player.height;
+        await this.renderer.computeAsync(this.enemies.computeInit);
+        this.pickupManager.spawnAll();
+        this.killEstimate = 0;
+    }
+
+    async respawnEnemies() {
+        await this.renderer.computeAsync(this.enemies.computeInit);
+        this.killEstimate = 0;
+    }
+
+    animate() {
+        const dt = Math.min(this.clock.getDelta(), 0.05);
+
+        // FPS counter
+        this.fpsFrames++;
+        this.fpsTime += dt;
+        if (this.fpsTime >= 0.5) { this.fpsDisplay = Math.round(this.fpsFrames / this.fpsTime); this.fpsFrames = 0; this.fpsTime = 0; }
+
+        // Dispatch to current state
+        try {
+            if (this.state && STATES[this.state]) {
+                STATES[this.state].update(dt, this);
+            }
+        } catch (e) { console.error('State update error:', e); }
+
+        // HUD (only visible during playing/drop)
+        if (this.state === 'playing' || this.state === 'drop') {
+            const hpPct = (this.player.health / CFG.player.maxHealth) * 100;
+            document.getElementById('health-bar').style.width = hpPct + '%';
+            document.getElementById('ammo').innerHTML = `${this.player.ammo} <span>/ ${CFG.weapon.maxAmmo}</span>`;
+            const aliveEst = Math.max(0, Math.round(ENEMY_COUNT - this.killEstimate));
+            document.getElementById('alive-count').textContent = `${aliveEst.toLocaleString()} alive`;
+            const mins = Math.floor(this.roundStats.survivalTime / 60);
+            const secs = Math.floor(this.roundStats.survivalTime % 60);
+            document.getElementById('timer').textContent =
+                `${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
+        }
+
+        document.getElementById('info').innerHTML = `FPS: ${this.fpsDisplay}<br>Particles: ${this.particles.POOL_SIZE.toLocaleString()}`;
+        this.debug.updateStats(this.fpsDisplay, this.player);
+
+        // Player shadow
+        const psY = this.terrain.getHeight(this.player.position.x, this.player.position.z);
+        this.playerShadow.position.set(this.player.position.x, psY + 0.12, this.player.position.z);
+        this.playerShadow.visible = (this.state === 'playing' || this.state === 'drop');
+
+        // Render with active camera
+        this.renderer.render(this.scene, this._activeCamera);
+
+        // Projectile collision readback (AFTER render to ensure GPU commands are flushed)
+        if (this.state === 'playing') {
+            this.enemies.checkProjectileHits(this.renderer);
+        }
+    }
+}
+
+// ============================================================
+//  BOOT
+// ============================================================
+async function main() {
+    try {
+        const game = new Game();
+        await game.init();
+    } catch (e) {
+        console.error('Init failed:', e);
+        const status = document.getElementById('load-status');
+        if (status) {
+            status.style.color = '#f44';
+            status.textContent = 'WebGPU init failed: ' + e.message;
+            const p = document.createElement('p');
+            p.style.cssText = 'color:#888;font-size:13px;margin-top:12px;max-width:500px;text-align:center';
+            p.textContent = 'WebGPU requires a modern browser (Chrome 113+, Firefox 141+, Safari 26+). Check that hardware acceleration is enabled.';
+            status.parentNode.appendChild(p);
+        }
+    }
+}
+main();
+</script>
+</body>
+</html>
