@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>MILLION2ONE - WebGPU</title>
+<title>MILLION2ONE</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -190,7 +190,7 @@ import * as THREE from 'three/webgpu';
 import {
     Fn, If, uniform, float, uint, int, vec2, vec3, vec4,
     instancedArray, instanceIndex, positionLocal,
-    mix, step, clamp, floor, fract, hash, texture, time
+    mix, step, clamp, floor, fract, hash, texture, time, pow
 } from 'three/tsl';
 
 // ============================================================
@@ -200,7 +200,8 @@ const VERSION = 'alpha 0.1';
 const KOFI_USERNAME = '';            // Set your Ko-fi username (e.g. 'yourname')
 const ANALYTICS_ID = 'G-4V75RP96FF'; // GA4 measurement ID
 const FEEDBACK_EMAIL = 'khrob@tangoedit.com';
-const TERRAIN_CONFIG = 'eyJ0ZXJyYWluIjp7InNlZWQiOjkyMCwib2N0YXZlcyI6MSwiZnJlcXVlbmN5IjowLjAwMywiYW1wbGl0dWRlIjoyNDAsImxhY3VuYXJpdHkiOjEuMSwicGVyc2lzdGVuY2UiOjAuNTcsIm9mZnNldCI6LTMwLCJyZXNvbHV0aW9uIjo1MTJ9LCJ3b3JsZCI6eyJzaXplIjoxMDAwMH19';           // Base64 terrain config from #terrain editor
+// Base64 terrain config from #terrain editor
+const TERRAIN_CONFIG = 'eyJ0ZXJyYWluIjp7InNlZWQiOjkyMCwib2N0YXZlcyI6OCwiZnJlcXVlbmN5IjowLjAwMTksImFtcGxpdHVkZSI6MTIwLCJsYWN1bmFyaXR5Ijo0LCJwZXJzaXN0ZW5jZSI6MC4xLCJvZmZzZXQiOjksInJlc29sdXRpb24iOjUxMn0sIndvcmxkIjp7InNpemUiOjMwMDB9fQ==';
 
 // ============================================================
 //  ANALYTICS (Google Analytics 4)
@@ -340,10 +341,10 @@ class SimplexNoise {
 const ENEMY_COUNT = 1024 * 1024; // ~1 million
 
 const CFG = {
-    terrain: { seed: 1135, octaves: 6, frequency: 0.003, amplitude: 50, lacunarity: 2.1, persistence: 0.48, offset: 25, resolution: 512 },
+    terrain: { seed: 1135, octaves: 6, frequency: 0.003, amplitude: 50, lacunarity: 2.1, persistence: 0.48, offset: 25, resolution: 2048 },
     player: { walkSpeed: 8, sprintMult: 1.8, jumpForce: 12, gravity: 28, height: 3.6, slopeEffect: 0.7, maxHealth: 100 },
-    enemies: { speed: 3.5, health: 100, damage: 8, attackRange: 3, attackRate: 1.0, size: 1.2, cullDistance: 800, flowInfluence: 0.3 },
-    weapon: { damage: 35, fireRate: 5, range: 500, maxAmmo: 30, spread: 0.015, hitRadius: 1.8 },
+    enemies: { speed: 1.75, health: 33, damage: 8, attackRange: 3, attackRate: 1.0, size: 1.2, cullDistance: 1500, flowInfluence: 0.3 },
+    weapon: { damage: 200, fireRate: 5, range: 500, maxAmmo: 30, spread: 0.015, hitRadius: 1.8 },
     pickups: { healthCount: 12, ammoCount: 15, healthAmount: 30, ammoAmount: 10, bobSpeed: 2, bobHeight: 0.3, respawnTime: 15 },
     lighting: { sunIntensity: 1.8, sunX: 0.5, sunY: 1.0, sunZ: 0.3, ambientIntensity: 0.45, fogNear: 400, fogFar: 1200, fogColor: '#a0b8d0' },
     world: { size: 10000 },
@@ -530,7 +531,8 @@ class GPUEnemySystem {
         // --- Storage arrays ---
         this.positions = instancedArray(ENEMY_COUNT, 'vec3');
         this.velocities = instancedArray(ENEMY_COUNT, 'vec3');
-        this.states = instancedArray(ENEMY_COUNT, 'vec4'); // x=health, y=type, z=attackTimer, w=flashTimer
+        this.states = instancedArray(ENEMY_COUNT, 'vec4'); // x=health, y=type, z=maxHealth, w=flashTimer
+        this.traits = instancedArray(ENEMY_COUNT, 'vec4'); // x=size(0.25-3.5), y=speed(0.3-3), z=toughness(0.3-3.5), w=aggression(0-1)
 
         // --- Uniforms (updated per frame) ---
         this.playerPosU = uniform(new THREE.Vector3());
@@ -615,6 +617,7 @@ class GPUEnemySystem {
         const positions = this.positions;
         const velocities = this.velocities;
         const states = this.states;
+        const traits = this.traits;
         const playerPos = this.playerPosU;
         const dt = this.dtU;
         const spd = this.enemySpeedU;
@@ -625,24 +628,50 @@ class GPUEnemySystem {
         const killBins = this.killBins;
         const nearbyCount = this.nearbyCount;
 
-        // INIT: scatter enemies randomly
+        // INIT: scatter enemies randomly and assign traits
         this.computeInit = Fn(() => {
             const pos = positions.element(instanceIndex);
             const state = states.element(instanceIndex);
             const vel = velocities.element(instanceIndex);
+            const trait = traits.element(instanceIndex);
+
+            // --- Traits: size, speed, toughness, aggression ---
+            // Size: wide range (0.25–3.5) peaked at 1.0
+            // Two hashes averaged → triangular distribution peaked at 0.5
+            // Then pow(4, x*2-1): maps 0→0.25, 0.5→1.0, 1.0→4.0
+            const sizeH1 = hash(instanceIndex.add(11));
+            const sizeH2 = hash(instanceIndex.add(15));
+            const sizeMid = sizeH1.add(sizeH2).mul(0.5); // 0–1 peaked at 0.5
+            const sizeTrait = pow(float(4.0), sizeMid.mul(2).sub(1)); // 0.25 → 1.0 → 4.0
+            trait.x.assign(sizeTrait.clamp(0.25, 3.5));
+            // Speed: strongly inverse of size + noise (tiny = blazing, huge = lumbering)
+            const speedTrait = float(3.5).sub(sizeTrait.mul(0.85)).add(hash(instanceIndex.add(12)).mul(0.8).sub(0.4));
+            trait.y.assign(speedTrait.clamp(0.3, 3.0));
+            // Toughness: correlated with size + wider noise (big = very tough)
+            const toughTrait = sizeTrait.mul(0.8).add(hash(instanceIndex.add(13)).mul(0.8).sub(0.4));
+            trait.z.assign(toughTrait.clamp(0.3, 3.5));
+            // Aggression: independent (0–1)
+            trait.w.assign(hash(instanceIndex.add(14)));
+
+            // --- Position: scatter radially with feathered exclusion zone around spawn ---
             const angle = hash(instanceIndex).mul(Math.PI * 2);
-            const radius = hash(instanceIndex.add(7)).mul(ws.mul(0.45));
+            // Feathered min radius: 120–280 per-enemy (organic edge, not a perfect circle)
+            const minRadius = float(120).add(hash(instanceIndex.add(16)).mul(160));
+            const maxRadius = ws.mul(0.45);
+            const radius = minRadius.add(hash(instanceIndex.add(7)).mul(maxRadius.sub(minRadius)));
             pos.x.assign(angle.cos().mul(radius));
             pos.z.assign(angle.sin().mul(radius));
-            // Sample terrain height
             const tu = pos.x.div(ws).add(0.5).clamp(0.001, 0.999);
             const tv = pos.z.div(ws).add(0.5).clamp(0.001, 0.999);
-            pos.y.assign(heightTex.sample(vec2(tu, tv)).x.add(sz.mul(0.6)));
+            pos.y.assign(heightTex.sample(vec2(tu, tv)).x.add(0.5).add(sz.mul(trait.x).mul(0.6)));
             vel.assign(vec3(0, 0, 0));
-            state.x.assign(maxHp);
-            state.y.assign(hash(instanceIndex.add(2)).mul(4).floor());
-            state.z.assign(hash(instanceIndex.add(3)));
-            state.w.assign(float(0));
+
+            // --- State: health scales with toughness ---
+            const enemyMaxHp = maxHp.mul(trait.z);
+            state.x.assign(enemyMaxHp);       // current health
+            state.y.assign(hash(instanceIndex.add(2)).mul(4).floor()); // type 0-3
+            state.z.assign(enemyMaxHp);        // max health (for color shader)
+            state.w.assign(float(0));           // flash timer
         })().compute(ENEMY_COUNT);
 
         // UPDATE: move toward player (alive), physics for all (alive + dead)
@@ -650,23 +679,28 @@ class GPUEnemySystem {
             const pos = positions.element(instanceIndex);
             const vel = velocities.element(instanceIndex);
             const state = states.element(instanceIndex);
+            const trait = traits.element(instanceIndex);
             // Flash timer decay
             state.w.assign(state.w.sub(dt).max(0));
 
             // Alive: swarm toward player with ring separation
             If(state.x.greaterThan(0), () => {
+                const aggression = trait.w; // 0 = passive orbit, 1 = direct charge
+
                 // Distance to player
                 const rawDx = playerPos.x.sub(pos.x);
                 const rawDz = playerPos.z.sub(pos.z);
                 const distToPlayer = rawDx.mul(rawDx).add(rawDz.mul(rawDz)).sqrt().max(0.01);
 
-                // Ring separation: each enemy orbits a unique point around the player
+                // Ring separation: aggressive enemies have tighter rings, slower orbit
                 const ringAngle = hash(instanceIndex.add(50)).mul(Math.PI * 2)
-                    .add(time.mul(hash(instanceIndex.add(70)).mul(0.4).add(0.1)));
-                const ringDist = float(3.0).add(hash(instanceIndex.add(60)).mul(5.0));
+                    .add(time.mul(hash(instanceIndex.add(70)).mul(0.4).add(0.1).mul(float(1).sub(aggression.mul(0.5)))));
+                const baseRingDist = float(3.0).add(hash(instanceIndex.add(60)).mul(5.0));
+                const ringDist = baseRingDist.mul(float(1).sub(aggression.mul(0.6))); // aggressive = tighter ring
 
-                // Blend: far = head straight for player, close = target ring position
-                const ringBlend = float(1).sub(distToPlayer.sub(float(15)).div(float(30)).clamp(0, 1));
+                // Blend: aggressive enemies charge from further away
+                const chargeRange = float(15).add(aggression.mul(25)); // passive=15, aggressive=40
+                const ringBlend = float(1).sub(distToPlayer.sub(chargeRange).div(float(30)).clamp(0, 1));
                 const targetX = mix(playerPos.x, playerPos.x.add(ringAngle.cos().mul(ringDist)), ringBlend);
                 const targetZ = mix(playerPos.z, playerPos.z.add(ringAngle.sin().mul(ringDist)), ringBlend);
 
@@ -694,27 +728,52 @@ class GPUEnemySystem {
                 // Formula: 1 / (density/200 + 1) — at 200 enemies/cell speed halves, at 600 it's 25%
                 const densitySlowdown = float(1).div(cellDensity.div(float(200)).add(1));
 
-                const speedVar = float(0.7).add(hash(instanceIndex.add(99)).mul(0.6));
-                const totalSlow = closeSlowdown.mul(densitySlowdown);
+                const speedVar = trait.y; // per-enemy speed trait (0.3–3.0)
+
+                // Slope-based speed: sample terrain height here and ahead
+                const slopeProbe = float(8); // look-ahead distance
+                const aheadX = pos.x.add(moveX.div(moveLen).mul(slopeProbe));
+                const aheadZ = pos.z.add(moveZ.div(moveLen).mul(slopeProbe));
+                const hereU = pos.x.div(ws).add(0.5).clamp(0.001, 0.999);
+                const hereV = pos.z.div(ws).add(0.5).clamp(0.001, 0.999);
+                const aheadU = aheadX.div(ws).add(0.5).clamp(0.001, 0.999);
+                const aheadV = aheadZ.div(ws).add(0.5).clamp(0.001, 0.999);
+                const hHere = heightTex.sample(vec2(hereU, hereV)).x;
+                const hAhead = heightTex.sample(vec2(aheadU, aheadV)).x;
+                const slopeDelta = hAhead.sub(hHere).div(slopeProbe); // positive = uphill
+                // Uphill: slow to 0.25x at steep inclines. Downhill: speed up to 2x
+                const slopeSpeed = clamp(float(1).sub(slopeDelta.mul(3)), 0.25, 2.0);
+
+                const totalSlow = closeSlowdown.mul(densitySlowdown).mul(slopeSpeed);
                 pos.x.addAssign(moveX.div(moveLen).mul(spd).mul(speedVar).mul(totalSlow).mul(dt));
                 pos.z.addAssign(moveZ.div(moveLen).mul(spd).mul(speedVar).mul(totalSlow).mul(dt));
             });
+        })().compute(ENEMY_COUNT);
 
-            // Physics for ALL enemies (alive fly from explosions, dead fall to ground)
+        // PHYSICS: separate shader — no If blocks, runs for ALL enemies (alive + dead)
+        this.computePhysics = Fn(() => {
+            const pos = positions.element(instanceIndex);
+            const vel = velocities.element(instanceIndex);
+            const state = states.element(instanceIndex);
+            const trait = traits.element(instanceIndex);
+
+            vel.y.subAssign(float(40).mul(dt));
             pos.addAssign(vel.mul(dt));
-            vel.y.subAssign(float(20).mul(dt));
-            vel.mulAssign(float(0.97));
+            vel.x.mulAssign(pow(float(0.4), dt));
+            vel.z.mulAssign(pow(float(0.4), dt));
+            vel.y.mulAssign(pow(float(0.8), dt));
 
             const half = ws.mul(0.48);
             pos.x.assign(pos.x.clamp(half.negate(), half));
             pos.z.assign(pos.z.clamp(half.negate(), half));
 
-            // Terrain collision — dead enemies sit lower (small cubes on ground)
+            // Terrain collision — dead enemies sit lower (small stumps on ground)
             const tu2 = pos.x.div(ws).add(0.5).clamp(0.001, 0.999);
             const tv2 = pos.z.div(ws).add(0.5).clamp(0.001, 0.999);
-            const terrainH = heightTex.sample(vec2(tu2, tv2)).x;
+            const terrainH = heightTex.sample(vec2(tu2, tv2)).x.add(0.5);
             const isAlive = step(float(0.01), state.x);
-            const targetY = terrainH.add(mix(sz.mul(0.12), sz.mul(0.6), isAlive));
+            const enemySize = sz.mul(trait.x);
+            const targetY = terrainH.add(mix(enemySize.mul(0.12), enemySize.mul(0.6), isAlive));
 
             const belowGround = step(pos.y, targetY);
             pos.y.assign(mix(pos.y, targetY, belowGround));
@@ -747,23 +806,22 @@ class GPUEnemySystem {
             });
         })().compute(ENEMY_COUNT);
 
-        // EXPLOSION: apply force and damage to nearby enemies
+        // EXPLOSION: apply force to ALL nearby enemies (alive + dead), damage only to alive
         this.computeExplosion = Fn(() => {
             const pos = positions.element(instanceIndex);
             const vel = velocities.element(instanceIndex);
             const state = states.element(instanceIndex);
-            If(state.x.greaterThan(0), () => {
-                const toEnemy = pos.sub(this.explosionPosU);
-                const dist = toEnemy.length();
-                If(dist.lessThan(this.explosionRadiusU), () => {
-                    const normDir = toEnemy.div(dist.max(float(0.5)));
-                    const falloff = float(1).sub(dist.div(this.explosionRadiusU));
-                    // Horizontal force away from explosion
-                    vel.x.addAssign(normDir.x.mul(this.explosionForceU).mul(falloff));
-                    vel.z.addAssign(normDir.z.mul(this.explosionForceU).mul(falloff));
-                    // Strong upward force
-                    vel.y.addAssign(this.explosionForceU.mul(falloff).mul(0.7));
-                    // Damage
+            const toEnemy = pos.sub(this.explosionPosU);
+            const dist = toEnemy.length();
+            If(dist.lessThan(this.explosionRadiusU), () => {
+                const normDir = toEnemy.div(dist.max(float(0.5)));
+                const falloff = float(1).sub(dist.div(this.explosionRadiusU));
+                // Force: ALL enemies (corpses fly from blasts!)
+                vel.x.addAssign(normDir.x.mul(this.explosionForceU).mul(falloff));
+                vel.z.addAssign(normDir.z.mul(this.explosionForceU).mul(falloff));
+                vel.y.addAssign(this.explosionForceU.mul(falloff).mul(0.7));
+                // Damage: only alive
+                If(state.x.greaterThan(0), () => {
                     state.x.subAssign(this.explosionDamageU.mul(falloff));
                     state.w.assign(float(0.15));
                     If(state.x.lessThanEqual(0), () => {
@@ -854,10 +912,12 @@ class GPUEnemySystem {
             const state = states.element(instanceIndex);
             If(state.x.greaterThan(0), () => {
                 const pos = positions.element(instanceIndex);
+                const trait = traits.element(instanceIndex);
                 const dx = pos.x.sub(playerPos.x);
                 const dz = pos.z.sub(playerPos.z);
                 const distSq = dx.mul(dx).add(dz.mul(dz));
-                If(distSq.lessThan(atkRange.mul(atkRange)), () => {
+                const sizedRange = atkRange.mul(trait.x); // bigger enemies reach further
+                If(distSq.lessThan(sizedRange.mul(sizedRange)), () => {
                     nearbyCount.element(int(0)).addAssign(uint(1));
                 });
             });
@@ -879,6 +939,7 @@ class GPUEnemySystem {
         const material = new THREE.MeshLambertMaterial();
         const instPos = this.positions.element(instanceIndex);
         const instState = this.states.element(instanceIndex);
+        const instTrait = this.traits.element(instanceIndex);
         const isAlive = step(float(0.01), instState.x);
 
         // Distance cull: scale to 0 if beyond cull distance
@@ -886,19 +947,44 @@ class GPUEnemySystem {
         const distSq = toCam.dot(toCam);
         const inRange = step(distSq, this.cullDistU.mul(this.cullDistU));
 
-        // Alive: full size. Dead: 1/5 size (small cubes on the ground)
-        const aliveScale = this.enemySizeU;
-        const deadScale = this.enemySizeU.mul(0.2);
-        const scale = inRange.mul(mix(deadScale, aliveScale, isAlive));
-        material.positionNode = positionLocal.mul(scale).add(instPos);
+        // Non-uniform scaling: per-enemy size trait (0.25–3.5) + wild hash-derived proportions
+        const sizeTrait = instTrait.x;
+        const scaleW = sizeTrait.mul(float(0.5).add(hash(instanceIndex.add(40)).mul(1.0))); // 50–150% width
+        const scaleH = sizeTrait.mul(float(0.4).add(hash(instanceIndex.add(41)).mul(1.4))); // 40–180% height (lanky vs squat)
+        const scaleD = sizeTrait.mul(float(0.5).add(hash(instanceIndex.add(42)).mul(1.0))); // 50–150% depth
+        const aliveScaleVec = vec3(
+            this.enemySizeU.mul(scaleW),
+            this.enemySizeU.mul(scaleH),
+            this.enemySizeU.mul(scaleD)
+        );
+        // Dead: 1/5 size. Scalar mix avoids vec3 mix issues in TSL.
+        const lifeScale = mix(float(0.2), float(1.0), isAlive).mul(inRange);
+        material.positionNode = vec3(
+            positionLocal.x.mul(aliveScaleVec.x).mul(lifeScale),
+            positionLocal.y.mul(aliveScaleVec.y).mul(lifeScale),
+            positionLocal.z.mul(aliveScaleVec.z).mul(lifeScale)
+        ).add(instPos);
 
-        // Color: alive = green→red health gradient with hit flash. Dead = dark gray
-        const healthPct = instState.x.div(this.enemyMaxHealthU).clamp(0, 1);
-        const healthColor = mix(vec3(0.85, 0.1, 0.1), vec3(0.25, 0.75, 0.2), healthPct);
+        // Trait-driven base color: speed→purple, toughness→green, aggression→red
+        const tSpeed = instTrait.y.div(3.0).clamp(0, 1);  // normalize 0–3 → 0–1
+        const tTough = instTrait.z.div(3.5).clamp(0, 1);  // normalize 0–3.5 → 0–1
+        const tAggro = instTrait.w;
+        const colSpeed = mix(vec3(0.25, 0.45, 0.65), vec3(0.7, 0.15, 0.9), tSpeed);  // steel blue → vivid purple
+        const colTough = mix(vec3(0.6, 0.5, 0.3), vec3(0.1, 0.75, 0.2), tTough);     // tan → bright green
+        const colAggro = mix(vec3(0.5, 0.5, 0.5), vec3(0.95, 0.15, 0.1), tAggro);    // gray → angry red
+        const traitBase = colSpeed.mul(0.4).add(colTough.mul(0.4)).add(colAggro.mul(0.2));
+
+        // Health overlay: modulate trait color by damage (white at full → red at low)
+        const healthPct = instState.x.div(instState.z.max(1)).clamp(0, 1); // state.z = max health
+        const healthTint = mix(vec3(0.9, 0.15, 0.1), vec3(1, 1, 1), healthPct);
+        const aliveColor = traitBase.mul(healthTint);
+
+        // Hit flash
         const flashAmt = clamp(instState.w.mul(10), 0, 1);
-        const aliveColor = mix(healthColor, vec3(1, 1, 1), flashAmt);
-        const deadColor = vec3(0.22, 0.22, 0.22);
-        material.colorNode = mix(deadColor, aliveColor, isAlive);
+        const aliveColorFlashed = mix(aliveColor, vec3(1, 1, 1), flashAmt);
+        // Corpse color: very dark gray
+        const deadColor = vec3(0.15, 0.15, 0.15);
+        material.colorNode = mix(deadColor, aliveColorFlashed, isAlive);
 
         this.mesh = new THREE.Mesh(instancedGeo, material);
         this.mesh.frustumCulled = false;
@@ -922,8 +1008,10 @@ class GPUEnemySystem {
         const sToCam = sInstPos.sub(this.cameraPosU);
         const sDistSq = sToCam.dot(sToCam);
         const sInRange = step(sDistSq, this.cullDistU.mul(this.cullDistU));
-        // Alive: full shadow. Dead: smaller shadow
-        const sScale = sInRange.mul(mix(this.enemySizeU.mul(0.18), this.enemySizeU.mul(0.9), sIsAlive));
+        // Alive: full shadow scaled by per-enemy size trait. Dead: 1/3 shadow (matches corpse)
+        const sSizeTrait = this.traits.element(instanceIndex).x;
+        const sDeadShadow = this.enemySizeU.mul(sSizeTrait).mul(0.33).max(0.4);
+        const sScale = sInRange.mul(mix(sDeadShadow, this.enemySizeU.mul(sSizeTrait).mul(0.9), sIsAlive));
 
         // Sample terrain height for shadow Y position
         const sTU = sInstPos.x.div(this.worldSizeU).add(0.5).clamp(0.001, 0.999);
@@ -2058,6 +2146,7 @@ const STATES = {
             // Keep enemies + particles alive in attract
             game.enemies.syncUniforms(dt, game.player.position, game.attractCamera.position);
             game.renderer.compute(game.enemies.computeUpdate);
+            game.renderer.compute(game.enemies.computePhysics);
             game.particles.dtU.value = dt;
             game.renderer.compute(game.particles.computeUpdate);
             // Live-sync lighting from debug sliders
@@ -2088,7 +2177,7 @@ const STATES = {
             game.regenerateTerrain();
             game.enemies.clearKillCount(game.renderer);
             // Set spawn height AFTER regen (which resets player.position.y)
-            const spawnH = game.terrain.getHeight(0, 0) + 600;
+            const spawnH = game.terrain.getHeight(0, 0) + 400;
             game.player.position.set(0, spawnH, 0);
             document.getElementById('pregame-overlay').style.display = 'flex';
             document.getElementById('gameover-overlay').style.display = 'none';
@@ -2149,6 +2238,7 @@ const STATES = {
             game.enemies.syncUniforms(dt, game.player.position, game.camera.position);
             game.enemies.updateDensity(dt, game.renderer);
             game.renderer.compute(game.enemies.computeUpdate);
+            game.renderer.compute(game.enemies.computePhysics);
             // Update particles + explosion spheres
             game.particles.dtU.value = dt;
             game.renderer.compute(game.particles.computeUpdate);
@@ -2211,6 +2301,7 @@ const STATES = {
             game.enemies.syncUniforms(dt, game.player.position, game.camera.position);
             game.enemies.updateDensity(dt, game.renderer);
             game.renderer.compute(game.enemies.computeUpdate);
+            game.renderer.compute(game.enemies.computePhysics);
             game.enemies.runNearbyCount(game.renderer);
             // Shooting
             const shot = game.player.tryShoot();
@@ -2783,7 +2874,7 @@ class Game {
 // ============================================================
 //  TERRAIN EDITOR (accessed via #terrain)
 // ============================================================
-function initTerrainEditor() {
+async function initTerrainEditor() {
     document.body.innerHTML = '';
     document.body.style.cssText = 'margin:0;background:#111;color:#ddd;font-family:"Share Tech Mono",monospace;display:flex;overflow:hidden;height:100vh';
 
@@ -2795,23 +2886,98 @@ function initTerrainEditor() {
     title.textContent = 'TERRAIN EDITOR';
     panel.appendChild(title);
 
-    // --- Canvas area ---
+    // --- View area (top: 2D heightmap, bottom: 3D orbital) ---
+    const viewArea = document.createElement('div');
+    viewArea.style.cssText = 'flex:1;display:flex;flex-direction:column;overflow:hidden';
+
+    // --- 2D Heightmap ---
     const canvasWrap = document.createElement('div');
-    canvasWrap.style.cssText = 'flex:1;display:flex;align-items:center;justify-content:center;position:relative';
+    canvasWrap.style.cssText = 'flex:1;display:flex;align-items:center;justify-content:center;position:relative;min-height:0';
     const canvas = document.createElement('canvas');
     const CSIZE = 512;
     canvas.width = CSIZE; canvas.height = CSIZE;
-    canvas.style.cssText = 'image-rendering:pixelated;width:min(80vw,80vh);height:min(80vw,80vh);border:1px solid rgba(255,255,255,0.15)';
+    canvas.style.cssText = 'image-rendering:pixelated;max-width:100%;max-height:100%;border:1px solid rgba(255,255,255,0.15)';
     canvasWrap.appendChild(canvas);
     const ctx = canvas.getContext('2d');
-
-    // Info overlay
     const info = document.createElement('div');
-    info.style.cssText = 'position:absolute;bottom:12px;left:12px;color:#8af;font-size:11px;letter-spacing:1px;pointer-events:none';
+    info.style.cssText = 'position:absolute;bottom:8px;left:8px;color:#8af;font-size:11px;letter-spacing:1px;pointer-events:none';
     canvasWrap.appendChild(info);
+    viewArea.appendChild(canvasWrap);
+
+    // --- Divider ---
+    const divider = document.createElement('div');
+    divider.style.cssText = 'height:1px;background:rgba(255,255,255,0.1);flex-shrink:0';
+    viewArea.appendChild(divider);
+
+    // --- 3D Orbital View ---
+    const view3dWrap = document.createElement('div');
+    view3dWrap.style.cssText = 'flex:1;position:relative;min-height:0';
+    viewArea.appendChild(view3dWrap);
+    const info3d = document.createElement('div');
+    info3d.style.cssText = 'position:absolute;top:8px;left:8px;color:#8af;font-size:11px;letter-spacing:1px;pointer-events:none;z-index:1';
+    info3d.textContent = 'Drag to orbit · Scroll to zoom';
+    view3dWrap.appendChild(info3d);
 
     document.body.appendChild(panel);
-    document.body.appendChild(canvasWrap);
+    document.body.appendChild(viewArea);
+
+    // --- Three.js 3D setup ---
+    const scene3d = new THREE.Scene();
+    scene3d.background = new THREE.Color('#1a1a2e');
+    scene3d.fog = new THREE.Fog('#1a1a2e', 800, 2000);
+    const cam3d = new THREE.PerspectiveCamera(50, 1, 1, 5000);
+    const renderer3d = new THREE.WebGPURenderer({ antialias: true });
+    await renderer3d.init();
+    renderer3d.domElement.style.cssText = 'width:100%;height:100%;display:block';
+    view3dWrap.appendChild(renderer3d.domElement);
+    const sun3d = new THREE.DirectionalLight(0xffffff, 1.5);
+    sun3d.position.set(1, 2, 0.5).normalize().multiplyScalar(400);
+    scene3d.add(sun3d);
+    scene3d.add(new THREE.AmbientLight(0x6688aa, 0.5));
+    let terrainMesh3d = null;
+
+    // Orbit camera state
+    let orbitTheta = 0.4, orbitPhi = 0.8, orbitRadius = 600;
+    let orbitTarget = new THREE.Vector3(0, 30, 0);
+    let isDragging = false, lastMX = 0, lastMY = 0;
+
+    function updateOrbitCamera() {
+        const x = orbitTarget.x + orbitRadius * Math.sin(orbitPhi) * Math.cos(orbitTheta);
+        const y = orbitTarget.y + orbitRadius * Math.cos(orbitPhi);
+        const z = orbitTarget.z + orbitRadius * Math.sin(orbitPhi) * Math.sin(orbitTheta);
+        cam3d.position.set(x, y, z);
+        cam3d.lookAt(orbitTarget);
+    }
+
+    renderer3d.domElement.addEventListener('mousedown', (e) => { isDragging = true; lastMX = e.clientX; lastMY = e.clientY; });
+    window.addEventListener('mouseup', () => isDragging = false);
+    window.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        const dx = e.clientX - lastMX, dy = e.clientY - lastMY;
+        lastMX = e.clientX; lastMY = e.clientY;
+        orbitTheta += dx * 0.005;
+        orbitPhi = Math.max(0.1, Math.min(Math.PI * 0.49, orbitPhi - dy * 0.005));
+        updateOrbitCamera();
+        renderer3d.render(scene3d, cam3d);
+    });
+    renderer3d.domElement.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        orbitRadius = Math.max(50, Math.min(3000, orbitRadius * (1 + e.deltaY * 0.001)));
+        updateOrbitCamera();
+        renderer3d.render(scene3d, cam3d);
+    }, { passive: false });
+
+    // Resize handler
+    function resize3d() {
+        const rect = view3dWrap.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+            renderer3d.setSize(rect.width, rect.height);
+            cam3d.aspect = rect.width / rect.height;
+            cam3d.updateProjectionMatrix();
+            renderer3d.render(scene3d, cam3d);
+        }
+    }
+    new ResizeObserver(resize3d).observe(view3dWrap);
 
     // --- Terrain params (local copy) ---
     const T = { ...CFG.terrain };
@@ -2861,6 +3027,51 @@ function initTerrainEditor() {
         ctx.strokeStyle = 'rgba(255,68,68,0.3)'; ctx.lineWidth = 1;
         ctx.beginPath(); ctx.arc(cx, cz, 16, 0, Math.PI*2); ctx.stroke();
         info.textContent = `Height at spawn: ${hCenter.toFixed(1)} | Range: ${hMin.toFixed(1)} to ${hMax.toFixed(1)} | World: ${size}`;
+
+        // --- Update 3D terrain mesh ---
+        if (terrainMesh3d) { scene3d.remove(terrainMesh3d); terrainMesh3d.geometry.dispose(); terrainMesh3d.material.dispose(); }
+        const TRES = 256;
+        const geo = new THREE.BufferGeometry();
+        const tr1 = TRES + 1;
+        const verts = new Float32Array(tr1 * tr1 * 3);
+        const colors = new Float32Array(tr1 * tr1 * 3);
+        const indices = [];
+        const tScale = size / 1000; // normalise visual size
+        for (let tz = 0; tz < tr1; tz++) {
+            for (let tx = 0; tx < tr1; tx++) {
+                const wx = (tx / TRES - 0.5) * size, wz = (tz / TRES - 0.5) * size;
+                let th = 0, tamp = 1, tfreq = frequency;
+                for (let o = 0; o < octaves; o++) { th += noise.noise2D((wx + noiseOffX) * tfreq, (wz + noiseOffZ) * tfreq) * tamp; tamp *= persistence; tfreq *= lacunarity; }
+                const tex2 = Math.abs(tx / TRES - 0.5) * 2, tez = Math.abs(tz / TRES - 0.5) * 2;
+                const tedge = Math.max(0, 1 - Math.pow(Math.max(tex2, tez), 3) * 1.5);
+                th = th * amplitude * tedge + offset;
+                const i = tz * tr1 + tx;
+                const vx = (tx / TRES - 0.5) * 1000, vz = (tz / TRES - 0.5) * 1000;
+                verts[i*3] = vx; verts[i*3+1] = th / tScale; verts[i*3+2] = vz;
+                const [cr, cg, cb] = heightColor(th);
+                colors[i*3] = cr/255; colors[i*3+1] = cg/255; colors[i*3+2] = cb/255;
+            }
+        }
+        for (let tz = 0; tz < TRES; tz++) for (let tx = 0; tx < TRES; tx++) {
+            const a = tz*tr1+tx, b = a+1, c = (tz+1)*tr1+tx, d = c+1;
+            indices.push(a,c,b,b,c,d);
+        }
+        geo.setIndex(indices);
+        geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        geo.computeVertexNormals();
+        terrainMesh3d = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
+        scene3d.add(terrainMesh3d);
+        // Spawn marker
+        const markerGeo = new THREE.SphereGeometry(4, 8, 8);
+        const markerMat = new THREE.MeshBasicMaterial({ color: 0xff4444 });
+        const marker = new THREE.Mesh(markerGeo, markerMat);
+        marker.position.set(0, hCenter / tScale + 8, 0);
+        terrainMesh3d.add(marker);
+        // Update orbit target height
+        orbitTarget.y = hCenter / tScale;
+        updateOrbitCamera();
+        renderer3d.render(scene3d, cam3d);
     }
 
     // --- Slider builder ---
@@ -2975,7 +3186,7 @@ function initTerrainEditor() {
 async function main() {
     // Terrain editor mode
     if (location.hash === '#terrain') {
-        initTerrainEditor();
+        await initTerrainEditor();
         return;
     }
     try {
