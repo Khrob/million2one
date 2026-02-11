@@ -124,6 +124,7 @@ canvas { display: block; }
 <div id="blocker" style="display:none">
     <h1>PAUSED</h1>
     <p>Click to resume</p>
+    <button id="exit-to-menu-btn" class="menu-btn" style="margin-top:24px;width:200px;pointer-events:auto">END RUN</button>
     <div class="controls">
         WASD - Move | SHIFT - Sprint | SPACE - Jump<br>
         MOUSE - Look | CLICK - Shoot | ~ - Debug<br>
@@ -199,6 +200,7 @@ const VERSION = 'alpha 0.1';
 const KOFI_USERNAME = '';            // Set your Ko-fi username (e.g. 'yourname')
 const ANALYTICS_ID = 'G-4V75RP96FF'; // GA4 measurement ID
 const FEEDBACK_EMAIL = 'khrob@tangoedit.com';
+const TERRAIN_CONFIG = 'eyJ0ZXJyYWluIjp7InNlZWQiOjkyMCwib2N0YXZlcyI6MSwiZnJlcXVlbmN5IjowLjAwMywiYW1wbGl0dWRlIjoyNDAsImxhY3VuYXJpdHkiOjEuMSwicGVyc2lzdGVuY2UiOjAuNTcsIm9mZnNldCI6LTMwLCJyZXNvbHV0aW9uIjo1MTJ9LCJ3b3JsZCI6eyJzaXplIjoxMDAwMH19';           // Base64 terrain config from #terrain editor
 
 // ============================================================
 //  ANALYTICS (Google Analytics 4)
@@ -338,8 +340,8 @@ class SimplexNoise {
 const ENEMY_COUNT = 1024 * 1024; // ~1 million
 
 const CFG = {
-    terrain: { seed: 42, octaves: 6, frequency: 0.0018, amplitude: 50, lacunarity: 2.1, persistence: 0.48, offset: 25, resolution: 512 },
-    player: { walkSpeed: 8, sprintMult: 1.8, jumpForce: 12, gravity: 28, height: 1.8, slopeEffect: 0.7, maxHealth: 100 },
+    terrain: { seed: 1135, octaves: 6, frequency: 0.003, amplitude: 50, lacunarity: 2.1, persistence: 0.48, offset: 25, resolution: 512 },
+    player: { walkSpeed: 8, sprintMult: 1.8, jumpForce: 12, gravity: 28, height: 3.6, slopeEffect: 0.7, maxHealth: 100 },
     enemies: { speed: 3.5, health: 100, damage: 8, attackRange: 3, attackRate: 1.0, size: 1.2, cullDistance: 800, flowInfluence: 0.3 },
     weapon: { damage: 35, fireRate: 5, range: 500, maxAmmo: 30, spread: 0.015, hitRadius: 1.8 },
     pickups: { healthCount: 12, ammoCount: 15, healthAmount: 30, ammoAmount: 10, bobSpeed: 2, bobHeight: 0.3, respawnTime: 15 },
@@ -351,6 +353,15 @@ const CFG = {
     audio: { masterVolume: 0.7, sfxVolume: 0.8, musicVolume: 0.3, maxSounds: 24, spatialRefDist: 10, spatialMaxDist: 500, spatialRolloff: 1 },
     debug: { damageFlash: false, godMode: false }
 };
+
+// Apply base64 terrain config if set
+if (TERRAIN_CONFIG) {
+    try {
+        const tc = JSON.parse(atob(TERRAIN_CONFIG));
+        if (tc.terrain) Object.assign(CFG.terrain, tc.terrain);
+        if (tc.world) Object.assign(CFG.world, tc.world);
+    } catch(e) { console.warn('Bad TERRAIN_CONFIG:', e); }
+}
 
 // ============================================================
 //  TERRAIN (CPU mesh + GPU height texture)
@@ -372,13 +383,17 @@ class Terrain {
         if (this.mesh) { this.scene.remove(this.mesh); this.mesh.geometry.dispose(); this.mesh.material.dispose(); }
         const noise = new SimplexNoise(CFG.terrain.seed);
         const { octaves, frequency, amplitude, lacunarity, persistence, offset } = CFG.terrain;
+        // Seed-dependent offset so origin doesn't always land on noise lattice vertex
+        let rs = CFG.terrain.seed;
+        const srng = () => { rs = (rs * 16807 + 1) % 2147483647; return rs / 2147483647; };
+        const noiseOffX = srng() * 10000 - 5000, noiseOffZ = srng() * 10000 - 5000;
         const res = this.res, size = this.size, r1 = res + 1;
         this.data = new Float32Array(r1 * r1);
         for (let z = 0; z < r1; z++) {
             for (let x = 0; x < r1; x++) {
                 const wx = (x / res - 0.5) * size, wz = (z / res - 0.5) * size;
                 let h = 0, amp = 1, freq = frequency;
-                for (let o = 0; o < octaves; o++) { h += noise.noise2D(wx * freq, wz * freq) * amp; amp *= persistence; freq *= lacunarity; }
+                for (let o = 0; o < octaves; o++) { h += noise.noise2D((wx + noiseOffX) * freq, (wz + noiseOffZ) * freq) * amp; amp *= persistence; freq *= lacunarity; }
                 const ex = Math.abs(x / res - 0.5) * 2, ez = Math.abs(z / res - 0.5) * 2;
                 const edge = Math.max(0, 1 - Math.pow(Math.max(ex, ez), 3) * 1.5);
                 this.data[z * r1 + x] = h * amplitude * edge + offset;
@@ -1888,7 +1903,7 @@ class DebugOverlay {
             { key: 'world.size', label: 'World Size', min: 1000, max: 50000, step: 1000 },
         ], regenTerrain);
         this.addSection('Terrain', [
-            { key: 'terrain.seed', label: 'Seed', min: 1, max: 9999, step: 1 },
+            { key: 'terrain.seed', label: 'Seed', min: 1, max: 9999, step: 1, stepper: true },
             { key: 'terrain.octaves', label: 'Octaves', min: 1, max: 8, step: 1 },
             { key: 'terrain.frequency', label: 'Frequency', min: 0.0005, max: 0.01, step: 0.0001 },
             { key: 'terrain.amplitude', label: 'Amplitude', min: 10, max: 800, step: 10 },
@@ -1981,10 +1996,20 @@ class DebugOverlay {
                 row.appendChild(cb);
             } else {
                 const slider = document.createElement('input'); slider.type = 'range'; slider.min = p.min; slider.max = p.max; slider.step = p.step; slider.value = CFG[cat][key];
-                const val = document.createElement('span'); val.className = 'val'; val.textContent = Number(CFG[cat][key]).toFixed(p.step < 1 ? (p.step < 0.01 ? 4 : 2) : 0);
-                slider.addEventListener('input', () => { const v = parseFloat(slider.value); CFG[cat][key] = v; val.textContent = v.toFixed(p.step < 1 ? (p.step < 0.01 ? 4 : 2) : 0); });
+                const decimals = p.step < 1 ? (p.step < 0.01 ? 4 : 2) : 0;
+                const val = document.createElement('span'); val.className = 'val'; val.textContent = Number(CFG[cat][key]).toFixed(decimals);
+                const updateVal = (v) => { CFG[cat][key] = v; slider.value = v; val.textContent = v.toFixed(decimals); };
+                slider.addEventListener('input', () => updateVal(parseFloat(slider.value)));
                 if (onCommit) slider.addEventListener('change', () => onCommit(cat, key));
-                row.appendChild(slider); row.appendChild(val);
+                if (p.stepper) {
+                    const mkStep = (label, delta) => { const b = document.createElement('button'); b.className = 'debug-btn'; b.style.cssText = 'padding:2px 7px;margin:0 1px;min-width:20px;font-size:13px;line-height:1;'; b.textContent = label; b.addEventListener('click', () => { const v = Math.min(parseFloat(slider.max), Math.max(parseFloat(slider.min), CFG[cat][key] + delta)); updateVal(v); if (onCommit) onCommit(cat, key); }); return b; };
+                    row.appendChild(mkStep('-', -p.step));
+                    row.appendChild(slider);
+                    row.appendChild(mkStep('+', p.step));
+                } else {
+                    row.appendChild(slider);
+                }
+                row.appendChild(val);
             }
             content.appendChild(row);
         }
@@ -2051,7 +2076,6 @@ const STATES = {
         enter(game) {
             game.setActiveCamera(game.camera);
             game.player.weaponGroup.visible = true;
-            game.player.position.set(0, 400, 0);
             game.player.pitch = -Math.PI / 2;
             game.player.yaw = 0;
             game.player.velocity.set(0, 0, 0);
@@ -2061,8 +2085,11 @@ const STATES = {
             game.player.fireTimer = 0;
             game.player.shooting = false;
             game.roundStats = { survivalTime: 0, kills: 0, shotsFired: 0 };
-            game.renderer.computeAsync(game.enemies.computeInit);
+            game.regenerateTerrain();
             game.enemies.clearKillCount(game.renderer);
+            // Set spawn height AFTER regen (which resets player.position.y)
+            const spawnH = game.terrain.getHeight(0, 0) + 600;
+            game.player.position.set(0, spawnH, 0);
             document.getElementById('pregame-overlay').style.display = 'flex';
             document.getElementById('gameover-overlay').style.display = 'none';
             document.getElementById('blocker').style.display = 'none';
@@ -2452,6 +2479,12 @@ class Game {
 
     setupPointerLock() {
         const blocker = document.getElementById('blocker');
+        // Exit to menu button
+        document.getElementById('exit-to-menu-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            blocker.style.display = 'none';
+            this.setState('attract');
+        });
         // Blocker click → resume playing (only relevant in PLAYING pause state)
         blocker.addEventListener('click', () => {
             if (this.state === 'playing' || this.state === 'pregame' || this.state === 'drop') {
@@ -2748,9 +2781,203 @@ class Game {
 }
 
 // ============================================================
+//  TERRAIN EDITOR (accessed via #terrain)
+// ============================================================
+function initTerrainEditor() {
+    document.body.innerHTML = '';
+    document.body.style.cssText = 'margin:0;background:#111;color:#ddd;font-family:"Share Tech Mono",monospace;display:flex;overflow:hidden;height:100vh';
+
+    // --- Panel ---
+    const panel = document.createElement('div');
+    panel.style.cssText = 'width:340px;min-width:340px;padding:16px;overflow-y:auto;background:rgba(10,10,15,0.95);border-right:1px solid rgba(255,255,255,0.1);display:flex;flex-direction:column;gap:10px';
+    const title = document.createElement('div');
+    title.style.cssText = 'font-size:18px;font-weight:bold;color:#fff;margin-bottom:4px;letter-spacing:2px';
+    title.textContent = 'TERRAIN EDITOR';
+    panel.appendChild(title);
+
+    // --- Canvas area ---
+    const canvasWrap = document.createElement('div');
+    canvasWrap.style.cssText = 'flex:1;display:flex;align-items:center;justify-content:center;position:relative';
+    const canvas = document.createElement('canvas');
+    const CSIZE = 512;
+    canvas.width = CSIZE; canvas.height = CSIZE;
+    canvas.style.cssText = 'image-rendering:pixelated;width:min(80vw,80vh);height:min(80vw,80vh);border:1px solid rgba(255,255,255,0.15)';
+    canvasWrap.appendChild(canvas);
+    const ctx = canvas.getContext('2d');
+
+    // Info overlay
+    const info = document.createElement('div');
+    info.style.cssText = 'position:absolute;bottom:12px;left:12px;color:#8af;font-size:11px;letter-spacing:1px;pointer-events:none';
+    canvasWrap.appendChild(info);
+
+    document.body.appendChild(panel);
+    document.body.appendChild(canvasWrap);
+
+    // --- Terrain params (local copy) ---
+    const T = { ...CFG.terrain };
+    const W = { size: CFG.world.size };
+
+    // --- Heightmap color (matches 3D terrain) ---
+    function heightColor(h) {
+        let r, g, b;
+        if (h < 10) { r=0.22; g=0.42; b=0.18; }
+        else if (h < 35) { r=0.32; g=0.52; b=0.22; }
+        else if (h < 60) { r=0.45; g=0.42; b=0.28; }
+        else if (h < 85) { r=0.55; g=0.5; b=0.4; }
+        else { r=0.85; g=0.88; b=0.92; }
+        return [Math.floor(r*255), Math.floor(g*255), Math.floor(b*255)];
+    }
+
+    // --- Generate & render ---
+    function render() {
+        const noise = new SimplexNoise(T.seed);
+        const { octaves, frequency, amplitude, lacunarity, persistence, offset } = T;
+        let rs = T.seed;
+        const srng = () => { rs = (rs * 16807 + 1) % 2147483647; return rs / 2147483647; };
+        const noiseOffX = srng() * 10000 - 5000, noiseOffZ = srng() * 10000 - 5000;
+        const size = W.size, res = CSIZE;
+        const img = ctx.createImageData(res, res);
+        let hMin = Infinity, hMax = -Infinity, hCenter = 0;
+        for (let z = 0; z < res; z++) {
+            for (let x = 0; x < res; x++) {
+                const wx = (x / res - 0.5) * size, wz = (z / res - 0.5) * size;
+                let h = 0, amp = 1, freq = frequency;
+                for (let o = 0; o < octaves; o++) { h += noise.noise2D((wx + noiseOffX) * freq, (wz + noiseOffZ) * freq) * amp; amp *= persistence; freq *= lacunarity; }
+                const ex = Math.abs(x / res - 0.5) * 2, ez = Math.abs(z / res - 0.5) * 2;
+                const edge = Math.max(0, 1 - Math.pow(Math.max(ex, ez), 3) * 1.5);
+                h = h * amplitude * edge + offset;
+                if (x === Math.floor(res/2) && z === Math.floor(res/2)) hCenter = h;
+                if (h < hMin) hMin = h; if (h > hMax) hMax = h;
+                const [r, g, b] = heightColor(h);
+                const i = (z * res + x) * 4;
+                img.data[i] = r; img.data[i+1] = g; img.data[i+2] = b; img.data[i+3] = 255;
+            }
+        }
+        ctx.putImageData(img, 0, 0);
+        // Draw spawn crosshair at center
+        const cx = Math.floor(res/2), cz = Math.floor(res/2);
+        ctx.strokeStyle = '#f44'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(cx-8, cz); ctx.lineTo(cx+8, cz); ctx.moveTo(cx, cz-8); ctx.lineTo(cx, cz+8); ctx.stroke();
+        ctx.strokeStyle = 'rgba(255,68,68,0.3)'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(cx, cz, 16, 0, Math.PI*2); ctx.stroke();
+        info.textContent = `Height at spawn: ${hCenter.toFixed(1)} | Range: ${hMin.toFixed(1)} to ${hMax.toFixed(1)} | World: ${size}`;
+    }
+
+    // --- Slider builder ---
+    function addSlider(label, value, min, max, step, onChange) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:8px';
+        const lbl = document.createElement('label');
+        lbl.style.cssText = 'flex:0 0 100px;color:#aaa;font-size:11px';
+        lbl.textContent = label;
+        const slider = document.createElement('input');
+        slider.type = 'range'; slider.min = min; slider.max = max; slider.step = step; slider.value = value;
+        slider.style.cssText = 'flex:1;height:4px;-webkit-appearance:none;background:rgba(255,255,255,0.15);border-radius:2px;outline:none';
+        const val = document.createElement('span');
+        val.style.cssText = 'flex:0 0 55px;text-align:right;color:#8af;font-size:11px';
+        const dec = step < 1 ? (step < 0.01 ? 4 : 2) : 0;
+        val.textContent = Number(value).toFixed(dec);
+        slider.addEventListener('input', () => {
+            val.textContent = Number(slider.value).toFixed(dec);
+            onChange(parseFloat(slider.value));
+            render();
+        });
+        row.appendChild(lbl); row.appendChild(slider); row.appendChild(val);
+        panel.appendChild(row);
+        return slider;
+    }
+
+    // --- Section label ---
+    function addLabel(text) {
+        const l = document.createElement('div');
+        l.style.cssText = 'color:#8af;font-size:12px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;margin-top:8px;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:4px';
+        l.textContent = text;
+        panel.appendChild(l);
+    }
+
+    // --- Build controls ---
+    addLabel('World');
+    addSlider('Size', W.size, 1000, 50000, 1000, v => W.size = v);
+    addLabel('Terrain');
+    addSlider('Seed', T.seed, 1, 9999, 1, v => T.seed = v);
+    addSlider('Octaves', T.octaves, 1, 8, 1, v => T.octaves = v);
+    addSlider('Frequency', T.frequency, 0.0005, 0.01, 0.0001, v => T.frequency = v);
+    addSlider('Amplitude', T.amplitude, 10, 800, 10, v => T.amplitude = v);
+    addSlider('Lacunarity', T.lacunarity, 1.0, 4.0, 0.1, v => T.lacunarity = v);
+    addSlider('Persistence', T.persistence, 0.1, 0.9, 0.01, v => T.persistence = v);
+    addSlider('Offset', T.offset, -50, 100, 1, v => T.offset = v);
+
+    // --- Base64 config ---
+    addLabel('Config');
+    const configRow = document.createElement('div');
+    configRow.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap';
+    const configInput = document.createElement('input');
+    configInput.type = 'text'; configInput.placeholder = 'Paste base64 config...';
+    configInput.style.cssText = 'flex:1;min-width:0;background:rgba(255,255,255,0.08);color:#ddd;border:1px solid rgba(255,255,255,0.15);border-radius:3px;padding:6px 8px;font-family:monospace;font-size:11px';
+    const mkBtn = (label, fn) => {
+        const b = document.createElement('button');
+        b.textContent = label;
+        b.style.cssText = 'padding:6px 12px;background:rgba(136,170,255,0.15);color:#8af;border:1px solid rgba(136,170,255,0.3);border-radius:4px;cursor:pointer;font-family:monospace;font-size:11px;white-space:nowrap';
+        b.addEventListener('click', fn);
+        return b;
+    };
+    const copyBtn = mkBtn('Copy', () => {
+        const cfg = { terrain: { ...T }, world: { ...W } };
+        const b64 = btoa(JSON.stringify(cfg));
+        configInput.value = b64;
+        navigator.clipboard.writeText(b64);
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => copyBtn.textContent = 'Copy', 1500);
+    });
+    const loadBtn = mkBtn('Load', () => {
+        try {
+            const cfg = JSON.parse(atob(configInput.value.trim()));
+            if (cfg.terrain) Object.assign(T, cfg.terrain);
+            if (cfg.world) Object.assign(W, cfg.world);
+            // Refresh sliders — easiest to just rebuild
+            location.hash = '#terrain';
+            location.reload();
+        } catch(e) { configInput.style.borderColor = '#f44'; setTimeout(() => configInput.style.borderColor = 'rgba(255,255,255,0.15)', 1500); }
+    });
+    // Store config in hash so reload preserves it
+    const applyBtn = mkBtn('Apply to Game', () => {
+        Object.assign(CFG.terrain, T);
+        CFG.world.size = W.size;
+        const cfg = { terrain: { ...T }, world: { ...W } };
+        const b64 = btoa(JSON.stringify(cfg));
+        configInput.value = b64;
+        navigator.clipboard.writeText(b64);
+        alert('Config copied & applied to CFG. Remove #terrain from URL and reload to play with these settings.');
+    });
+    configRow.appendChild(configInput);
+    configRow.appendChild(copyBtn);
+    configRow.appendChild(loadBtn);
+    panel.appendChild(configRow);
+    const applyRow = document.createElement('div');
+    applyRow.style.cssText = 'display:flex;gap:6px';
+    applyRow.appendChild(applyBtn);
+    const backBtn = mkBtn('← Back to Game', () => { location.hash = ''; location.reload(); });
+    applyRow.appendChild(backBtn);
+    panel.appendChild(applyRow);
+
+    // --- Hint ---
+    const hint = document.createElement('div');
+    hint.style.cssText = 'color:#555;font-size:10px;margin-top:auto;padding-top:12px;line-height:1.6';
+    hint.textContent = 'Red crosshair = player spawn (0,0). Copy the base64 config and set it in the game source, or paste into the TERRAIN_CONFIG constant.';
+    panel.appendChild(hint);
+
+    render();
+}
+
+// ============================================================
 //  BOOT
 // ============================================================
 async function main() {
+    // Terrain editor mode
+    if (location.hash === '#terrain') {
+        initTerrainEditor();
+        return;
+    }
     try {
         const game = new Game();
         await game.init();
