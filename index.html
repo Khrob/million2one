@@ -31,6 +31,20 @@ canvas { display: block; }
 #kill-count { position: absolute; top: 25%; left: 50%; transform: translateX(-50%); color: #fff; font-size: 64px; font-weight: 900; text-shadow: 0 0 10px rgba(0,0,0,0.9), 0 2px 20px rgba(0,0,0,0.5), 0 0 40px rgba(136,170,255,0.15); text-align: center; letter-spacing: 4px; white-space: nowrap; will-change: transform; transform-origin: center center; -webkit-mask-image: linear-gradient(to bottom, white 40%, transparent 100%); mask-image: linear-gradient(to bottom, white 40%, transparent 100%); }
 #timer { position: absolute; bottom: 60px; left: 30px; color: #ccc; font-size: 18px; text-shadow: 0 0 4px #000; letter-spacing: 2px; }
 #info { position: absolute; top: 16px; right: 16px; color: #fff; font-size: 13px; text-shadow: 0 0 4px #000; text-align: right; line-height: 1.6; }
+/* Weapon parameter sliders */
+/* Weapon parameter bars — 4 vertical bars stacked down left side */
+#weapon-sliders { position: absolute; left: 12px; top: 5%; height: 85%; display: flex; flex-direction: column; gap: 4px; }
+.wpn-slider { flex: 1; display: flex; flex-direction: column; align-items: center; }
+.wpn-slider .label { font-size: 9px; color: #aaa; text-shadow: 0 0 4px #000; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 3px; }
+.wpn-slider .track { flex: 1; width: 50px; background: rgba(255,255,255,0.06); border-radius: 3px; position: relative; border: 1px solid rgba(255,255,255,0.06); overflow: hidden; }
+.wpn-slider .fill { position: absolute; bottom: 0; width: 100%; border-radius: 2px; transition: height 0.1s; }
+.wpn-slider .val { font-size: 10px; color: #888; text-shadow: 0 0 4px #000; margin-top: 3px; }
+.wpn-slider.active .label { color: #fff; }
+.wpn-slider.active .track { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.15); }
+/* Heat bar — vertical, right side */
+#heat-bar-container { position: absolute; right: 12px; top: 5%; width: 50px; height: 85%; background: rgba(255,255,255,0.06); border-radius: 4px; border: 1px solid rgba(255,255,255,0.08); }
+#heat-bar { position: absolute; bottom: 0; width: 100%; border-radius: 3px; transition: height 0.1s, background 0.15s; }
+#heat-label { position: absolute; right: 12px; top: calc(5% + 85% + 4px); font-size: 9px; color: #555; text-shadow: 0 0 4px #000; letter-spacing: 1px; text-align: center; width: 50px; }
 #hit-flash { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,0,0,0.3); pointer-events: none; z-index: 9; opacity: 0; transition: opacity 0.1s; }
 #damage-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 8; }
 #debug {
@@ -86,6 +100,28 @@ canvas { display: block; }
 .go-buttons { display: flex; gap: 16px; }
 .go-highscore { color: #fa4; font-size: 18px; letter-spacing: 3px; margin-bottom: 20px; text-align: center; text-shadow: 0 0 12px rgba(255,170,68,0.4); animation: go-wibble 0.8s ease-in-out infinite; display: none; }
 @keyframes go-wibble { 0%,100% { transform: rotate(-2deg) scale(1); } 25% { transform: rotate(1.5deg) scale(1.05); } 50% { transform: rotate(-1deg) scale(1.02); } 75% { transform: rotate(2deg) scale(1.04); } }
+/* "What is this?" tab */
+#whatis-tab { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); background: rgba(136,170,255,0.1); color: #8af; border: 1px solid rgba(136,170,255,0.25); border-bottom: none; border-radius: 8px 8px 0 0; padding: 8px 24px; font-family: 'Share Tech Mono', monospace; font-size: 12px; letter-spacing: 1px; cursor: pointer; transition: all 0.2s; z-index: 91; pointer-events: auto; }
+#whatis-tab:hover { background: rgba(136,170,255,0.25); color: #fff; }
+#whatis-tab.wiggle { animation: tab-wiggle 3s ease-in-out infinite; }
+@keyframes tab-wiggle { 0%,60%,100% { transform: translateX(-50%) translateY(0); } 65% { transform: translateX(-50%) translateY(-4px); } 70% { transform: translateX(-50%) translateY(0); } 75% { transform: translateX(-50%) translateY(-3px); } 80% { transform: translateX(-50%) translateY(0); } }
+#whatis-panel { display: none; position: absolute; bottom: 36px; left: 50%; transform: translateX(-50%); background: rgba(10,10,20,0.96); border: 1px solid rgba(136,170,255,0.2); border-radius: 8px; padding: 24px 30px; max-width: 480px; width: 90vw; z-index: 91; pointer-events: auto; }
+#whatis-panel h3 { color: #8af; font-size: 15px; margin-bottom: 12px; letter-spacing: 2px; }
+#whatis-panel p { color: #aaa; font-size: 12px; line-height: 1.8; margin: 8px 0; }
+#whatis-panel .tag { display: inline-block; background: rgba(136,170,255,0.12); color: #8af; padding: 2px 8px; border-radius: 3px; font-size: 11px; margin: 0 2px; }
+#whatis-panel .warn { color: #fa4; }
+/* Death cause */
+.go-death-cause { color: #f88; font-size: 14px; letter-spacing: 1px; margin-bottom: 16px; text-align: center; }
+.go-death-cause span { color: #faa; }
+/* Help tooltips */
+.help-row { display: flex; align-items: flex-start; gap: 12px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.help-key { min-width: 110px; color: #8af; font-size: 13px; white-space: nowrap; }
+.help-desc { color: #ccc; font-size: 13px; }
+.help-detail { color: #777; font-size: 11px; margin-top: 2px; }
+.help-section-title { color: #fa4; font-size: 12px; letter-spacing: 2px; margin: 16px 0 8px; text-transform: uppercase; }
+/* Gun loadout line in share */
+.go-loadout { color: #666; font-size: 12px; letter-spacing: 1px; margin-bottom: 8px; text-align: center; }
+.go-loadout span { color: #fa4; }
 /* === Loading Screen === */
 #loading-screen {
     position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -140,8 +176,9 @@ canvas { display: block; }
     <button id="exit-to-menu-btn" class="menu-btn" style="margin-top:24px;width:200px;pointer-events:auto">END RUN</button>
     <div class="controls">
         WASD - Move | SHIFT - Sprint | SPACE - Jump<br>
-        MOUSE - Look | CLICK - Shoot | ~ - Debug<br>
-        R - Reload | ESC - Release cursor
+        MOUSE - Look | CLICK - Shoot | R - Vent heat<br>
+        Hold 1/2/3/4 + Mouse - Tune gun | 7/8/9 - Presets<br>
+        ~ - Debug | ESC - Pause
     </div>
     <button id="fullscreen-btn" class="menu-btn" style="margin-top:20px;width:200px;z-index:101;pointer-events:auto" onclick="event.stopPropagation();if(document.fullscreenElement)document.exitFullscreen();else document.documentElement.requestFullscreen()">FULLSCREEN</button>
 </div>
@@ -149,11 +186,19 @@ canvas { display: block; }
     <div id="crosshair"></div>
     <div id="health-text">HEALTH</div>
     <div id="health-bar-container"><div id="health-bar" style="width:100%"></div></div>
-    <div id="ammo">30 <span>/ 30</span></div>
+    <div id="ammo" style="display:none"></div>
     <div id="alive-count"></div>
     <div id="kill-count">0</div>
     <div id="timer">00:00</div>
     <div id="info"></div>
+    <div id="weapon-sliders">
+        <div class="wpn-slider" data-param="spread"><span class="label">Spread</span><div class="track"><div class="fill" style="height:6%;background:#5599ff"></div></div><span class="val">0</span></div>
+        <div class="wpn-slider" data-param="rate"><span class="label">Rate</span><div class="track"><div class="fill" style="height:50%;background:#44ddaa"></div></div><span class="val">0</span></div>
+        <div class="wpn-slider" data-param="power"><span class="label">Power</span><div class="track"><div class="fill" style="height:50%;background:#ff8844"></div></div><span class="val">0</span></div>
+        <div class="wpn-slider" data-param="speed"><span class="label">Speed</span><div class="track"><div class="fill" style="height:50%;background:#cc66ff"></div></div><span class="val">0</span></div>
+    </div>
+    <div id="heat-bar-container"><div id="heat-bar"></div></div>
+    <div id="heat-label">HEAT</div>
 </div>
 <div id="hit-flash"></div>
 <div id="damage-overlay"></div>
@@ -363,6 +408,7 @@ const CFG = {
     player: { walkSpeed: 8, sprintMult: 1.8, jumpForce: 12, gravity: 28, height: 3.6, slopeEffect: 0.7, maxHealth: 100 },
     enemies: { speed: 1.75, health: 33, damage: 8, attackRange: 3, attackRate: 1.0, size: 1.2, cullDistance: 1500, flowInfluence: 0.3 },
     weapon: { damage: 200, fireRate: 5, range: 500, maxAmmo: 30, spread: 0.015, hitRadius: 1.8, convergeDist: 60, barrelX: 0.2, barrelY: -0.14, barrelZ: -0.65 },
+    heat: { maxHeat: 100, coolRate: 5, spreadCost: 0.3, rateCost: 1.5, powerCost: 1.2, speedCost: 0.8, ventRate: 33.3, thrustMult: 1.5, warningThreshold: 80 },
     handedness: 'left',  // 'left' = gun on left side (southpaw), 'right' = gun on right side
     pickups: { healthAmount: 50, ammoAmount: 15, bobSpeed: 2, bobHeight: 0.3, dropChance: 0.006, dropLifetime: 20 },
     lighting: { sunIntensity: 1.8, sunX: 0.5, sunY: 1.0, sunZ: 0.3, ambientIntensity: 0.45, fogNear: 400, fogFar: 1200, fogColor: '#adb8c7' },
@@ -992,8 +1038,9 @@ class GPUEnemySystem {
                 const pos = positions.element(instanceIndex);
                 const trait = traits.element(instanceIndex);
                 const dx = pos.x.sub(playerPos.x);
+                const dy = pos.y.sub(playerPos.y);
                 const dz = pos.z.sub(playerPos.z);
-                const distSq = dx.mul(dx).add(dz.mul(dz));
+                const distSq = dx.mul(dx).add(dy.mul(dy)).add(dz.mul(dz));
                 const sizedRange = atkRange.mul(trait.x); // bigger enemies reach further
                 If(distSq.lessThan(sizedRange.mul(sizedRange)), () => {
                     nearbyCount.element(int(0)).addAssign(uint(1));
@@ -1404,9 +1451,9 @@ class GPUParticleSystem {
     emit(pos, dir, count, type) {
         const presets = {
             blood:     { speed: 8,  spread: 1.5, life: 0.8,  size: 0.5, color: [0.8, 0.05, 0.02], gravity: 1.2 },
-            muzzle:    { speed: 4,  spread: 0.4, life: 0.12, size: 0.2, color: [1.0, 0.9, 0.3],   gravity: 0 },
-            exhaust:   { speed: 18, spread: 0.6, life: 0.4,  size: 0.35,color: [1.0, 0.8, 0.3],   gravity: 0.2 },
-            trail:     { speed: 0.3,spread: 0.08,life: 3.0,  size: 0.15,color: [1.0, 0.7, 0.2],   gravity: 0.0 },
+            muzzle:    { speed: 4,  spread: 0.4, life: 0.08, size: 0.08,color: [1.0, 0.9, 0.3],   gravity: 0 },
+            exhaust:   { speed: 18, spread: 0.6, life: 0.2,  size: 0.12,color: [1.0, 0.8, 0.3],   gravity: 0.2 },
+            trail:     { speed: 0.3,spread: 0.08,life: 2.0,  size: 0.08,color: [1.0, 0.7, 0.2],   gravity: 0.0 },
             explosion: { speed: 14, spread: 2.0, life: 1.2,  size: 0.7, color: [1.0, 0.5, 0.1],   gravity: 0.8 },
             spark:     { speed: 20, spread: 0.8, life: 0.5,  size: 0.1, color: [1.0, 0.95, 0.6],  gravity: 0.3 },
         };
@@ -1503,12 +1550,13 @@ class ProjectileSystem {
         this.nextIdx = 0;
     }
 
-    fire(origin, direction) {
+    fire(origin, direction, speed, damage) {
         const p = this.pool[this.nextIdx];
         this.nextIdx = (this.nextIdx + 1) % this.POOL_SIZE;
         p.pos.copy(origin);
         p.prevPos.copy(origin);
-        p.vel.copy(direction).multiplyScalar(CFG.projectile.speed);
+        p.vel.copy(direction).multiplyScalar(speed || CFG.projectile.speed);
+        p.damage = damage || CFG.projectile.explosionDamage;
         p.active = true;
         p.life = CFG.projectile.maxLife;
         p.trailTimer = 0;
@@ -1541,7 +1589,7 @@ class ProjectileSystem {
             const th = this.terrain.getHeight(p.pos.x, p.pos.z);
             if (p.pos.y <= th) {
                 p.active = false; p.mesh.visible = false;
-                impacts.push(new THREE.Vector3(p.pos.x, th, p.pos.z));
+                impacts.push({ pos: new THREE.Vector3(p.pos.x, th, p.pos.z), damage: p.damage || CFG.projectile.explosionDamage });
                 continue;
             }
             // Out of bounds
@@ -1569,17 +1617,59 @@ class Player {
         this.ammo = CFG.weapon.maxAmmo;
         this.fireTimer = 0;
         this.shooting = false;
+        // Weapon parameters (0–255 each)
+        this.wpnParams = { spread: 220, rate: 50, power: 180, speed: 80 };
+        this.wpnPresets = [
+            { spread: 220, rate: 50, power: 180, speed: 80 },   // 7: Shotgun — wide, punchy, slow projectiles
+            { spread: 5, rate: 20, power: 255, speed: 255 },    // 8: Sniper — tight, slow fire, devastating
+            { spread: 255, rate: 255, power: 255, speed: 255 }, // 9: GIVE IT ALL YOU'VE GOT
+        ];
+        this.heat = 0;
+        this.adjustingParam = null; // which param key 1-4 is held
+        this.adjustMouseAccum = 0;
         this.position.set(0, this.terrain.getHeight(0, 0) + CFG.player.height, 0);
         this.setupInput();
         this.buildWeaponModel();
     }
 
     setupInput() {
-        document.addEventListener('keydown', e => { this.keys[e.code] = true; });
-        document.addEventListener('keyup', e => { this.keys[e.code] = false; });
+        const paramKeys = { 'Digit1': 'spread', 'Digit2': 'rate', 'Digit3': 'power', 'Digit4': 'speed' };
+        document.addEventListener('keydown', e => {
+            this.keys[e.code] = true;
+            // 1-4: start adjusting weapon parameter
+            if (paramKeys[e.code] && this.locked) {
+                this.adjustingParam = paramKeys[e.code];
+                this.adjustMouseAccum = 0;
+            }
+            // 7/8/9: load preset
+            if (e.code === 'Digit7' && this.locked) Object.assign(this.wpnParams, this.wpnPresets[0]);
+            if (e.code === 'Digit8' && this.locked) Object.assign(this.wpnParams, this.wpnPresets[1]);
+            if (e.code === 'Digit9' && this.locked) Object.assign(this.wpnParams, this.wpnPresets[2]);
+        });
+        document.addEventListener('keyup', e => {
+            this.keys[e.code] = false;
+            if (paramKeys[e.code]) {
+                // Find if any other param key is still held — that one takes over
+                const stillHeld = Object.keys(paramKeys).find(k => this.keys[k]);
+                this.adjustingParam = stillHeld ? paramKeys[stillHeld] : null;
+            }
+        });
         document.addEventListener('mousemove', e => {
             if (!this.locked) return;
-            this.mouseDX += e.movementX; this.mouseDY += e.movementY;
+            // Suppress mouselook while adjusting weapon params
+            if (!this.adjustingParam) {
+                this.mouseDX += e.movementX; this.mouseDY += e.movementY;
+            }
+            // If adjusting a weapon param, horizontal mouse movement changes it
+            if (this.adjustingParam) {
+                this.adjustMouseAccum += e.movementX;
+                const sens = 0.5; // pixels per unit
+                const delta = Math.trunc(this.adjustMouseAccum * sens);
+                if (delta !== 0) {
+                    this.wpnParams[this.adjustingParam] = Math.max(0, Math.min(255, this.wpnParams[this.adjustingParam] + delta));
+                    this.adjustMouseAccum -= delta / sens;
+                }
+            }
         });
         document.addEventListener('mousedown', e => { if (e.button === 0 && this.locked) this.shooting = true; });
         document.addEventListener('mouseup', e => { if (e.button === 0) this.shooting = false; });
@@ -1670,37 +1760,61 @@ class Player {
         if (this.fireTimer > 0) this.fireTimer -= dt;
         this.muzzleFlash.material.opacity *= 0.85;
         if (this.muzzleFlash.material.opacity < 0.01) this.muzzleFlash.material.opacity = 0;
+
+        // Passive heat cooling
+        if (this.heat > 0) {
+            this.heat = Math.max(0, this.heat - CFG.heat.coolRate * dt);
+        }
     }
+
+    // Heat cost for current weapon config
+    getHeatPerShot() {
+        const s = this.wpnParams.spread / 255;
+        const r = this.wpnParams.rate / 255;
+        const p = this.wpnParams.power / 255;
+        const f = this.wpnParams.speed / 255;
+        return CFG.heat.spreadCost * s + CFG.heat.rateCost * r + CFG.heat.powerCost * p + CFG.heat.speedCost * f;
+    }
+
+    // Derived weapon stats from params
+    getFireRate() { return 2 + (this.wpnParams.rate / 255) * 18; } // 2–20 shots/sec
+    getSpread() { return (this.wpnParams.spread / 255) * 1.047; } // 0–60° in radians
+    getProjectileSpeed() { return 30 + (this.wpnParams.speed / 255) * 270; } // 30–300 m/s
+    getDamage() { return 1 + (this.wpnParams.power / 255) * 99; } // 1–100
 
     tryShoot() {
         if (!this.shooting || this.fireTimer > 0) return null;
-        if (this.ammo <= 0) {
-            this.fireTimer = 1 / CFG.weapon.fireRate;
-            return 'dry';
+
+        // Add heat — check for overheat
+        const hps = this.getHeatPerShot();
+        this.heat += hps;
+        if (this.heat >= CFG.heat.maxHeat) {
+            this.heat = CFG.heat.maxHeat;
+            return 'overheat'; // caller handles explosion/death
         }
-        this.fireTimer = 1 / CFG.weapon.fireRate;
-        this.ammo--;
+
+        this.fireTimer = 1 / this.getFireRate();
         this.muzzleFlash.material.opacity = 1;
         this.pitch += 0.01;
         this.weaponGroup.position.z = 0.04;
 
-        // Camera-center aim direction (where crosshair points)
+        // Camera-center aim direction with weapon spread
+        const spread = this.getSpread();
         const aimDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
-        aimDir.x += (Math.random() - 0.5) * CFG.weapon.spread;
-        aimDir.y += (Math.random() - 0.5) * CFG.weapon.spread;
+        aimDir.x += (Math.random() - 0.5) * spread;
+        aimDir.y += (Math.random() - 0.5) * spread;
         aimDir.normalize();
 
         // Barrel offset in camera-local space (matches the viewmodel gun position)
         const side = this.handSide || (CFG.handedness === 'left' ? -1 : 1);
         const barrelOffset = new THREE.Vector3(CFG.weapon.barrelX * side, CFG.weapon.barrelY, CFG.weapon.barrelZ);
-        // Transform to world space
         const barrelWorldPos = barrelOffset.applyQuaternion(this.camera.quaternion).add(this.camera.position);
 
         // Convergence: aim barrel shot towards where the crosshair hits at convergeDist
         const convergePoint = this.camera.position.clone().addScaledVector(aimDir, CFG.weapon.convergeDist);
         const barrelDir = convergePoint.sub(barrelWorldPos).normalize();
 
-        return { origin: barrelWorldPos, direction: barrelDir };
+        return { origin: barrelWorldPos, direction: barrelDir, speed: this.getProjectileSpeed(), damage: this.getDamage() };
     }
 
     reload() { this.ammo = CFG.weapon.maxAmmo; }
@@ -2277,6 +2391,53 @@ class AudioEngine {
         setTimeout(() => { try { src.stop(); } catch(e) {} }, fadeTime * 1000 + 50);
         this.currentMusic = null;
     }
+
+    // Continuous heat whine — call every frame with current heat 0–100
+    updateHeatWhine(heat) {
+        const threshold = 0.5; // starts at 50% heat
+        const norm = heat / CFG.heat.maxHeat;
+        if (norm < threshold) {
+            // Below threshold: silence
+            if (this._heatWhine) {
+                this._heatWhine.gain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
+            }
+            return;
+        }
+        // Intensity 0→1 mapped from threshold→1.0
+        const intensity = (norm - threshold) / (1 - threshold);
+        if (!this._heatWhine) {
+            // Create persistent oscillator + filter chain
+            const ctx = this.ctx;
+            const osc = ctx.createOscillator();
+            osc.type = 'sawtooth';
+            osc.frequency.value = 800;
+            const osc2 = ctx.createOscillator();
+            osc2.type = 'sine';
+            osc2.frequency.value = 2400;
+            const filter = ctx.createBiquadFilter();
+            filter.type = 'bandpass';
+            filter.Q.value = 8;
+            filter.frequency.value = 1200;
+            const gain = ctx.createGain();
+            gain.gain.value = 0;
+            osc.connect(filter);
+            osc2.connect(filter);
+            filter.connect(gain);
+            gain.connect(this.sfxGain);
+            osc.start();
+            osc2.start();
+            this._heatWhine = { osc, osc2, filter, gain };
+        }
+        const hw = this._heatWhine;
+        const now = this.ctx.currentTime;
+        // Pitch rises with heat: 800→3000 Hz base, 2400→6000 Hz harmonic
+        hw.osc.frequency.setTargetAtTime(800 + intensity * 2200, now, 0.05);
+        hw.osc2.frequency.setTargetAtTime(2400 + intensity * 3600, now, 0.05);
+        hw.filter.frequency.setTargetAtTime(1200 + intensity * 4000, now, 0.05);
+        // Volume: quiet at threshold, screaming near max
+        const vol = intensity * intensity * 0.18;
+        hw.gain.gain.setTargetAtTime(vol, now, 0.05);
+    }
 }
 
 // ============================================================
@@ -2393,7 +2554,7 @@ class DebugOverlay {
         mkBtn('Regen Terrain', () => this.game.regenerateTerrain());
         mkBtn('Respawn Enemies', () => this.game.respawnEnemies());
         mkBtn('Clear Pickups', () => this.game.pickupManager.spawnAll());
-        mkBtn('Full Heal + Ammo', () => { this.game.player.health = CFG.player.maxHealth; this.game.player.ammo = CFG.weapon.maxAmmo; });
+        mkBtn('Full Heal + Ammo', () => { this.game.player.health = CFG.player.maxHealth; this.game.player.ammo = CFG.weapon.maxAmmo; this.game.player.heat = 0; });
         mkBtn('Teleport Center', () => { const g = this.game; g.player.position.set(0, g.terrain.getHeight(0,0)+CFG.player.height, 0); });
         this.el.appendChild(btns);
 
@@ -2543,8 +2704,10 @@ const STATES = {
             game.player.grounded = false;
             game.player.health = CFG.player.maxHealth;
             game.player.ammo = CFG.weapon.maxAmmo;
+            game.player.heat = 0;
             game.player.fireTimer = 0;
             game.player.shooting = false;
+            game.deathCause = 'enemies';
             game.roundStats = { survivalTime: 0, kills: 0, shotsFired: 0 };
             game._kcJuice = null;  // Reset kill streak juice
             game.regenerateTerrain();
@@ -2692,8 +2855,18 @@ const STATES = {
             game.enemies.runNearbyCount(game.renderer);
             // Shooting
             const shot = game.player.tryShoot();
-            if (shot === 'dry') {
-                game.audio.play('dryfire');
+            if (shot === 'overheat') {
+                // Gun explodes — kill the player
+                game.deathCause = 'overheat';
+                game.player.health = 0;
+                const pos = game.player.position.clone();
+                const upDir = new THREE.Vector3(0, 1, 0);
+                game.particles.emit(pos, upDir, 80, 'explosion');
+                game.renderer.compute(game.particles.computeSpawn);
+                game.particles.emit(pos, upDir, 50, 'spark');
+                game.renderer.compute(game.particles.computeSpawn);
+                game.audio.play('explosion');
+                game.shakeTimer = 0.6;
             } else if (shot) {
                 game.roundStats.shotsFired++;
                 game.particles.emit(shot.origin, shot.direction, CFG.particles.muzzleCount, 'muzzle');
@@ -2701,11 +2874,25 @@ const STATES = {
                 // Launch exhaust burst — big plume behind the projectile
                 game.particles.emit(shot.origin, shot.direction, 40, 'exhaust');
                 game.renderer.compute(game.particles.computeSpawn);
-                game.projectiles.fire(shot.origin, shot.direction);
+                game.projectiles.fire(shot.origin, shot.direction, shot.speed, shot.damage);
                 game.audio.play('gunshot');
             }
+            // Venting: R key = vent heat as upward thrust
+            if (game.player.keys['KeyR'] && game.player.heat > 0) {
+                const ventAmount = CFG.heat.ventRate * dt;
+                const actualVent = Math.min(game.player.heat, ventAmount);
+                game.player.heat -= actualVent;
+                // Thrust proportional to heat vented
+                const thrust = actualVent * CFG.heat.thrustMult;
+                game.player.velocity.y += thrust;
+                game.player.grounded = false;
+                // Block shooting while venting
+                game.player.shooting = false;
+            }
+            // Heat whine audio
+            game.audio.updateHeatWhine(game.player.heat);
             // --- Helper: trigger explosion at a point ---
-            const triggerExplosion = (impactPos) => {
+            const triggerExplosion = (impactPos, damage) => {
                 game.pickupManager.recordHitPosition(impactPos);
                 const upDir = new THREE.Vector3(0, 1, 0);
                 game.particles.emit(impactPos, upDir, CFG.particles.explosionCount, 'explosion');
@@ -2715,7 +2902,7 @@ const STATES = {
                 game.enemies.explosionPosU.value.copy(impactPos);
                 game.enemies.explosionRadiusU.value = CFG.projectile.explosionRadius;
                 game.enemies.explosionForceU.value = CFG.projectile.explosionForce;
-                game.enemies.explosionDamageU.value = CFG.projectile.explosionDamage;
+                game.enemies.explosionDamageU.value = damage;
                 game.renderer.compute(game.enemies.computeExplosion);
                 game.explosionSpheres.spawn(impactPos, CFG.projectile.explosionRadius);
                 game.audio.play('explosion', impactPos);
@@ -2738,15 +2925,16 @@ const STATES = {
                 const p = game.projectiles.pool[idx];
                 if (p.active) {
                     const hitPos = p.pos.clone();
+                    const dmg = p.damage || CFG.projectile.explosionDamage;
                     p.active = false;
                     p.mesh.visible = false;
-                    triggerExplosion(hitPos);
+                    triggerExplosion(hitPos, dmg);
                 }
             }
             // Terrain impacts (ground collision)
             const impacts = game.projectiles.update(dt, game.particles, game.renderer);
-            for (const impactPos of impacts) {
-                triggerExplosion(impactPos);
+            for (const impact of impacts) {
+                triggerExplosion(impact.pos, impact.damage);
             }
             // Upload projectile positions + run GPU collision (readback happens after render in animate)
             game.enemies.uploadProjectilePositions(game.projectiles.pool);
@@ -2768,6 +2956,7 @@ const STATES = {
             if (!CFG.debug.godMode) {
                 const nearbyCount = game.enemies.getNearbyCount();
                 if (nearbyCount > 0) {
+                    game.deathCause = 'enemies';
                     game.player.takeDamage(CFG.enemies.damage * Math.min(nearbyCount, 50) * dt);
                 }
             }
@@ -2806,6 +2995,7 @@ const STATES = {
             if (document.pointerLockElement) document.exitPointerLock();
             game.player.locked = false;
             game.player.shooting = false;
+            game.audio.updateHeatWhine(0); // silence the whine
             const overlay = document.getElementById('gameover-overlay');
             overlay.style.display = 'flex';
             document.getElementById('hud').style.display = 'none';
@@ -2831,6 +3021,20 @@ const STATES = {
             // Stat line
             overlay.querySelector('.go-stat-line').innerHTML =
                 `\u23F1 <span>${timeStr}</span> &nbsp;\u2502&nbsp; \uD83C\uDFAF <span>${accuracy}</span> &nbsp;\u2502&nbsp; \uD83D\uDC80 <span>${kills.toLocaleString()}</span> &nbsp;\u2502&nbsp; \uD83D\uDD25 <span>${maxStreak.toLocaleString()}</span> streak`;
+            // Death cause
+            const deathMessages = {
+                overheat: 'Your gun overheated and exploded.',
+                enemies: 'Overwhelmed by the horde.',
+            };
+            const causeEl = overlay.querySelector('.go-death-cause');
+            causeEl.textContent = deathMessages[game.deathCause] || deathMessages.enemies;
+            // Gun loadout hex
+            const wp = game.player.wpnParams;
+            const hex = (v) => v.toString(16).padStart(2, '0').toUpperCase();
+            const loadoutHex = `#${hex(wp.spread)}${hex(wp.rate)}${hex(wp.power)}${hex(wp.speed)}`;
+            game.roundStats.loadoutHex = loadoutHex;
+            const loadoutEl = overlay.querySelector('.go-loadout');
+            loadoutEl.innerHTML = `Loadout: <span>${loadoutHex}</span>`;
             // Check for new high score before saving
             const prevScores = game.getHighScores();
             const isNewHighScore = prevScores.length === 0 || game.roundStats.survivalTime > prevScores[0].time;
@@ -2966,7 +3170,7 @@ class Game {
         // Pointer lock + events
         this.setupPointerLock();
         window.addEventListener('resize', () => this.onResize());
-        document.addEventListener('keydown', e => { if (e.code === 'KeyR' && this.player.locked) { this.player.reload(); this.audio.play('reload'); } });
+        // Reload removed — weapon system uses heat/ammo pickups instead
 
         // Fade out loading screen, start attract
         updateLoadProgress(100, 'Ready');
@@ -3164,6 +3368,30 @@ class Game {
         banner.appendChild(supportBtn);
         el.appendChild(banner);
 
+        // "What is this?" tab
+        const whatisTab = document.createElement('div');
+        whatisTab.id = 'whatis-tab';
+        whatisTab.textContent = 'What is this?';
+        const whatisPanel = document.createElement('div');
+        whatisPanel.id = 'whatis-panel';
+        whatisPanel.innerHTML = `<h3>MILLION2ONE</h3>
+            <p>A browser-based FPS experiment: <span class="tag">1,000,000 enemies</span> simulated on the GPU, all at once, in a single HTML file.</p>
+            <p class="warn">This is an early prototype. You'll need a relatively beefy machine with a decent GPU to run it smoothly — optimisation hasn't begun yet.</p>
+            <p>We're still working out the core gameplay mechanics — weapon tuning, enemy behaviour, movement systems — so things will change. A lot.</p>
+            <p>All graphics are placeholder / work-in-progress. If it looks rough, that's because it is!</p>
+            <p style="margin-top:12px;color:#8af">Feedback is very welcome. Hit the <span class="tag">SUPPORT THIS GAME</span> button above to share your thoughts or fuel development.</p>`;
+        const seenWhatis = localStorage.getItem('m2o_seen_whatis');
+        const hasPlayed = localStorage.getItem('fps_highscores');
+        if (!seenWhatis && !hasPlayed) whatisTab.classList.add('wiggle');
+        whatisTab.onclick = () => {
+            const showing = whatisPanel.style.display === 'block';
+            whatisPanel.style.display = showing ? 'none' : 'block';
+            whatisTab.classList.remove('wiggle');
+            localStorage.setItem('m2o_seen_whatis', '1');
+        };
+        el.appendChild(whatisTab);
+        el.appendChild(whatisPanel);
+
         // High Scores panel
         const scoresPanel = document.createElement('div');
         scoresPanel.className = 'menu-panel';
@@ -3234,11 +3462,37 @@ class Game {
         const helpPanel = document.createElement('div');
         helpPanel.className = 'menu-panel';
         helpPanel.id = 'help-panel';
-        helpPanel.innerHTML = `<h2>CONTROLS</h2>
-            <p>WASD — Move</p><p>SHIFT — Sprint</p><p>SPACE — Jump</p>
-            <p>MOUSE — Look around</p><p>CLICK — Shoot</p><p>R — Reload</p>
-            <p>~ — Debug panel</p><p>ESC — Release cursor</p>
-            <p style="margin-top:16px;color:#666">Survive against one million GPU-computed enemies. Shoot the ground to send them flying!</p>`;
+        helpPanel.style.minWidth = '500px';
+        const helpRows = [
+            { section: 'Movement' },
+            { key: 'W A S D', desc: 'Move', detail: 'Forward, left, back, right' },
+            { key: 'SHIFT', desc: 'Sprint', detail: 'Hold while moving for 1.8x speed' },
+            { key: 'SPACE', desc: 'Jump', detail: 'Only while grounded' },
+            { section: 'Combat' },
+            { key: 'LEFT CLICK', desc: 'Shoot', detail: 'Hold for continuous fire. Rate depends on your gun config.' },
+            { key: 'R', desc: 'Vent heat', detail: 'Hold to vent heat as upward thrust. More heat = more boost. No shooting while venting.' },
+            { section: 'Weapon Tuning' },
+            { key: 'Hold 1 + Mouse', desc: 'Adjust Spread', detail: 'Left = tighter beam, Right = wider cone. High spread = shotgun.' },
+            { key: 'Hold 2 + Mouse', desc: 'Adjust Rate', detail: 'Left = slower, Right = faster fire. High rate = big heat buildup.' },
+            { key: 'Hold 3 + Mouse', desc: 'Adjust Power', detail: 'Left = weaker, Right = stronger. Affects damage per hit.' },
+            { key: 'Hold 4 + Mouse', desc: 'Adjust Speed', detail: 'Left = slow projectiles, Right = near-hitscan.' },
+            { key: '7 / 8 / 9', desc: 'Load presets', detail: '7 = Shotgun, 8 = Sniper, 9 = Everything maxed (danger!)' },
+            { section: 'System' },
+            { key: 'MOUSE', desc: 'Look around', detail: 'Free mouselook while pointer is locked' },
+            { key: 'F', desc: 'Fullscreen', detail: 'Toggle fullscreen mode' },
+            { key: '~', desc: 'Debug panel', detail: 'Live-tweak all game parameters. Press again to close.' },
+            { key: 'ESC', desc: 'Pause / Release cursor', detail: 'Releases pointer lock. Click to resume.' },
+        ];
+        let helpHTML = '<h2>CONTROLS</h2>';
+        for (const row of helpRows) {
+            if (row.section) {
+                helpHTML += `<div class="help-section-title">${row.section}</div>`;
+            } else {
+                helpHTML += `<div class="help-row"><div class="help-key">${row.key}</div><div><div class="help-desc">${row.desc}</div><div class="help-detail">${row.detail}</div></div></div>`;
+            }
+        }
+        helpHTML += `<p style="margin-top:16px;color:#555;font-size:11px">Your gun is fully configurable. Every shot builds heat — let it hit 100 and it explodes, killing you instantly. Vent heat to cool down and gain thrust. Master the cycle to fly.</p>`;
+        helpPanel.innerHTML = helpHTML;
         const helpBack = document.createElement('button');
         helpBack.className = 'menu-btn back-btn';
         helpBack.textContent = 'BACK';
@@ -3261,7 +3515,7 @@ class Game {
         const el = document.getElementById('pregame-overlay');
         el.innerHTML = `
             <div class="drop-text">CLICK TO DROP</div>
-            <div class="drop-sub">WASD move · SHIFT sprint · SPACE jump · R reload</div>
+            <div class="drop-sub">WASD move · SHIFT sprint · SPACE jump · R vent heat</div>
         `;
     }
 
@@ -3273,6 +3527,10 @@ class Game {
         title.className = 'go-title';
         title.textContent = 'GAME OVER';
         el.appendChild(title);
+        // Death cause
+        const deathCause = document.createElement('div');
+        deathCause.className = 'go-death-cause';
+        el.appendChild(deathCause);
         // Remain count (hero number)
         const remain = document.createElement('div');
         remain.className = 'go-remain';
@@ -3293,6 +3551,10 @@ class Game {
         hsText.className = 'go-highscore';
         hsText.textContent = 'NEW HIGH SCORE!';
         el.appendChild(hsText);
+        // Gun loadout line
+        const loadoutLine = document.createElement('div');
+        loadoutLine.className = 'go-loadout';
+        el.appendChild(loadoutLine);
         // Share button
         const shareBtn = document.createElement('button');
         shareBtn.className = 'go-share-btn';
@@ -3375,10 +3637,12 @@ class Game {
         const barLen = 20;
         const filledCount = Math.round((remain / ENEMY_COUNT) * barLen);
         const bar = '\u2588'.repeat(filledCount) + '\u2591'.repeat(barLen - filledCount);
+        const loadout = this.roundStats.loadoutHex || '#80808080';
         return [
             'MILLION2ONE',
             `${bar} ${remain.toLocaleString()} remain`,
             `\u23F1 ${timeStr} | \uD83C\uDFAF ${accuracy} | \uD83D\uDC80 ${kills.toLocaleString()}`,
+            `\uD83D\uDD2B ${loadout}`,
             'million2.one'
         ].join('\n');
     }
@@ -3430,7 +3694,27 @@ class Game {
         if (this.state === 'playing' || this.state === 'drop') {
             const hpPct = (this.player.health / CFG.player.maxHealth) * 100;
             document.getElementById('health-bar').style.width = hpPct + '%';
-            document.getElementById('ammo').innerHTML = `${this.player.ammo} <span>/ ${CFG.weapon.maxAmmo}</span>`;
+            // Ammo display hidden — heat system replaces ammo
+            // Weapon parameter sliders
+            const sliderColors = { spread: '#5599ff', rate: '#44ddaa', power: '#ff8844', speed: '#cc66ff' };
+            const sliderEls = document.querySelectorAll('.wpn-slider');
+            sliderEls.forEach(el => {
+                const param = el.dataset.param;
+                const val = this.player.wpnParams[param];
+                const pct = (val / 255 * 100).toFixed(1);
+                el.querySelector('.fill').style.height = pct + '%';
+                el.querySelector('.fill').style.background = sliderColors[param];
+                el.querySelector('.val').textContent = val;
+                el.classList.toggle('active', this.player.adjustingParam === param);
+            });
+            // Heat bar
+            const heatPct = (this.player.heat / CFG.heat.maxHeat * 100).toFixed(1);
+            const heatBar = document.getElementById('heat-bar');
+            heatBar.style.height = heatPct + '%';
+            const heatNorm = this.player.heat / CFG.heat.maxHeat;
+            if (heatNorm < 0.5) heatBar.style.background = `rgb(${Math.round(heatNorm * 2 * 255)}, ${Math.round(180 + heatNorm * 75)}, 40)`;
+            else if (heatNorm < 0.8) heatBar.style.background = `rgb(255, ${Math.round(255 - (heatNorm - 0.5) * 3.33 * 255)}, 20)`;
+            else heatBar.style.background = `rgb(255, ${Math.round(60 - (heatNorm - 0.8) * 5 * 60)}, ${Math.round(20 + Math.sin(performance.now() * 0.01) * 20)})`;
             const killCount = this.enemies.getKillCount();
             const aliveCount = Math.max(0, ENEMY_COUNT - killCount);
             // Kill streak juice
