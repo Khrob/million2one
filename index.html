@@ -363,7 +363,7 @@ const CFG = {
     weapon: { damage: 200, fireRate: 5, range: 500, maxAmmo: 30, spread: 0.015, hitRadius: 1.8, convergeDist: 60, barrelX: 0.2, barrelY: -0.14, barrelZ: -0.65 },
     handedness: 'left',  // 'left' = gun on left side (southpaw), 'right' = gun on right side
     pickups: { healthCount: 12, ammoCount: 15, healthAmount: 30, ammoAmount: 10, bobSpeed: 2, bobHeight: 0.3, respawnTime: 15 },
-    lighting: { sunIntensity: 1.8, sunX: 0.5, sunY: 1.0, sunZ: 0.3, ambientIntensity: 0.45, fogNear: 400, fogFar: 1200, fogColor: '#a0b8d0' },
+    lighting: { sunIntensity: 1.8, sunX: 0.5, sunY: 1.0, sunZ: 0.3, ambientIntensity: 0.45, fogNear: 400, fogFar: 1200, fogColor: '#adb8c7' },
     world: { size: 10000 },
     flowMap: { resolution: 64, updateInterval: 0.25 },
     particles: { poolSize: 2097152, muzzleCount: 12, trailCount: 20, bloodCount: 25, sparkCount: 15, explosionCount: 50, explosionSparkCount: 30 },
@@ -2922,16 +2922,18 @@ class Game {
         const pos = normalize(positionLocal);
         const py = pos.y;  // -1 (bottom) to +1 (top)
 
-        // Gradient: deep blue at zenith → pale blue-gray at horizon → warm haze below
-        const zenith = vec3(0.12, 0.18, 0.45);
-        const midSky = vec3(0.45, 0.58, 0.78);
-        const horizon = vec3(0.68, 0.72, 0.78);
-        const belowHorizon = vec3(0.55, 0.52, 0.50);
+        // Derive fog color in LINEAR space from CFG (Three.js Color converts sRGB hex → linear)
+        const fogC = new THREE.Color(CFG.lighting.fogColor);
+        const fogCol = vec3(fogC.r, fogC.g, fogC.b);  // linear space — matches scene fog exactly
 
+        // Gradient: deep blue at zenith → pale blue-gray → atmospheric haze at horizon → fog below
+        const zenith = vec3(0.01, 0.02, 0.16);    // linear: dark blue
+        const midSky = vec3(0.17, 0.30, 0.57);    // linear: medium blue
+        // These are LINEAR values so they'll look correct after sRGB output conversion
+
+        // Upper sky gradient (above haze band)
         const skyT = smoothstep(float(0.0), float(1.0), py);
-        const upperSky = mix(horizon, mix(midSky, zenith, skyT), skyT);
-        const lowerT = smoothstep(float(-0.3), float(0.0), py);
-        const skyColor = mix(belowHorizon, upperSky, lowerT);
+        const upperSky = mix(fogCol, mix(midSky, zenith, skyT), skyT);
 
         // Wispy clouds: elongated noise bands at mid-altitude
         const px = pos.x;
@@ -2980,10 +2982,18 @@ class Game {
         const sunHaze = pow(sunDot, float(8.0)).mul(0.15);
         const sunColor = vec3(1.0, 0.92, 0.7);
 
-        // Compose
-        const finalColor = mix(skyColor, vec3(1.0, 1.0, 1.0), cloudAlpha1.add(cloudAlpha2))
+        // Compose sky + clouds + effects
+        const composedColor = mix(upperSky, vec3(1.0, 1.0, 1.0), cloudAlpha1.add(cloudAlpha2))
             .add(streakColor.mul(streakAlpha))
             .add(sunColor.mul(sunGlow.add(sunHaze)));
+
+        // Atmospheric haze band: blends EVERYTHING toward fog color near horizon
+        // This extends well above py=0 so fogged terrain blends seamlessly into sky
+        // At py <= 0: 100% fog color (below horizon)
+        // At py = 0.15: ~50% haze
+        // At py >= 0.35: no haze, pure sky
+        const hazeStrength = smoothstep(float(0.35), float(0.0), py);
+        const finalColor = mix(composedColor, fogCol, hazeStrength);
 
         skyMat.colorNode = finalColor;
         const skyMesh = new THREE.Mesh(skyGeo, skyMat);
