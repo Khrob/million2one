@@ -102,7 +102,7 @@ canvas { display: block; }
 .support-btn { background: rgba(255,170,68,0.15); color: #fa4; border: 1px solid rgba(255,170,68,0.35); border-radius: 4px; padding: 10px 18px; cursor: pointer; font-family: 'Share Tech Mono', monospace; font-size: 12px; letter-spacing: 2px; transition: all 0.15s; text-shadow: 0 0 8px rgba(255,170,68,0.3); }
 .support-btn:hover { background: rgba(255,170,68,0.3); border-color: rgba(255,170,68,0.6); color: #fff; text-shadow: 0 0 12px rgba(255,170,68,0.5); }
 #support-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); display: none; align-items: center; justify-content: center; z-index: 300; }
-.modal-box { background: rgba(10,10,20,0.98); border: 1px solid rgba(136,170,255,0.2); border-radius: 8px; padding: 28px 32px; width: 440px; max-height: 80vh; overflow-y: auto; position: relative; }
+.modal-box { background: rgba(10,10,20,0.98); border: 1px solid rgba(136,170,255,0.2); border-radius: 8px; padding: 28px 32px; width: 500px; max-height: 80vh; overflow-y: auto; position: relative; }
 .modal-box .close-x { position: absolute; top: 10px; right: 14px; background: none; border: none; color: #555; font-size: 22px; cursor: pointer; font-family: monospace; line-height: 1; }
 .modal-box .close-x:hover { color: #fff; }
 .modal-box h2 { color: #8af; font-size: 15px; margin-bottom: 18px; letter-spacing: 2px; text-transform: uppercase; }
@@ -117,7 +117,7 @@ canvas { display: block; }
 .modal-panel p { color: #888; font-size: 12px; line-height: 1.8; margin: 6px 0; }
 .modal-panel a { color: #fa4; text-decoration: none; }
 .modal-panel a:hover { color: #fff; text-decoration: underline; }
-.modal-panel .kofi-frame { width: 100%; height: 340px; border: none; border-radius: 4px; background: #0a0a0f; }
+.modal-panel .kofi-frame { width: 100%; height: 55vh; border: none; border-radius: 4px; background: #0a0a0f; }
 .modal-btn { padding: 8px 16px; background: rgba(136,170,255,0.08); color: #8af; border: 1px solid rgba(136,170,255,0.2); border-radius: 4px; cursor: pointer; font-family: 'Share Tech Mono', monospace; font-size: 11px; letter-spacing: 1px; transition: all 0.15s; margin-right: 6px; }
 .modal-btn:hover { background: rgba(136,170,255,0.18); color: #fff; }
 .feedback-sent { color: #4e4; font-size: 12px; display: none; margin-top: 8px; }
@@ -169,8 +169,10 @@ canvas { display: block; }
             <p>If you enjoy it, consider fuelling development!</p>
             <div id="kofi-container" style="margin-top:16px">
                 <iframe id="kofi-frame" class="kofi-frame" src="" title="Support on Ko-fi" style="display:none"></iframe>
-                <p id="kofi-fallback"><a href="#" id="kofi-link" target="_blank">Support on Ko-fi</a></p>
-                <p style="color:#555;font-size:11px;margin-top:6px">Configure KOFI_USERNAME in the source to enable embedded donations</p>
+                <div id="kofi-fallback">
+                    <a href="#" id="kofi-link" target="_blank">Support on Ko-fi</a>
+                    <p style="color:#555;font-size:11px;margin-top:6px">Configure KOFI_USERNAME in the source to enable embedded donations</p>
+                </div>
             </div>
         </div>
         <div class="modal-panel" id="panel-feedback">
@@ -206,7 +208,7 @@ import {
 //  GAME CONFIG
 // ============================================================
 const VERSION = 'alpha 0.1';
-const KOFI_USERNAME = '';            // Set your Ko-fi username (e.g. 'yourname')
+const KOFI_USERNAME = 'million2one';  // Set your Ko-fi username (e.g. 'yourname')
 const ANALYTICS_ID = 'G-4V75RP96FF'; // GA4 measurement ID
 const FEEDBACK_EMAIL = 'khrob@tangoedit.com';
 // Base64 terrain config from #terrain editor
