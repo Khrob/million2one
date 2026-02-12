@@ -70,8 +70,17 @@ canvas { display: block; }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 #gameover-overlay { background: rgba(0,0,0,0.82); }
 .go-title { color: #f44; font-size: 52px; letter-spacing: 4px; margin-bottom: 30px; text-shadow: 0 0 20px rgba(255,68,68,0.4); }
-.go-stats { color: #ccc; font-size: 15px; line-height: 2.4; margin-bottom: 30px; text-align: center; }
+.go-remain { font-size: 44px; color: #fff; letter-spacing: 3px; margin-bottom: 6px; text-shadow: 0 0 24px rgba(136,170,255,0.3); text-align: center; }
+.go-remain span { display: block; font-size: 14px; color: #8af; letter-spacing: 4px; margin-top: 4px; text-shadow: none; }
+.go-bar { width: 280px; height: 6px; background: rgba(255,255,255,0.08); border-radius: 3px; margin: 16px auto; overflow: hidden; }
+.go-bar-fill { height: 100%; background: linear-gradient(90deg, #8af, #68f); border-radius: 3px; transition: width 1.5s ease-out; }
+.go-stats { color: #ccc; font-size: 15px; line-height: 2.4; margin-bottom: 20px; text-align: center; }
 .go-stats span { color: #8af; }
+.go-stat-line { color: #888; font-size: 13px; letter-spacing: 1px; margin-bottom: 28px; text-align: center; }
+.go-stat-line span { color: #aaa; }
+.go-share-btn { display: block; width: 280px; padding: 14px 0; margin: 0 auto 20px; background: rgba(68,220,170,0.1); color: #4da; border: 1px solid rgba(68,220,170,0.3); border-radius: 4px; cursor: pointer; font-family: 'Share Tech Mono', monospace; font-size: 14px; letter-spacing: 2px; text-align: center; transition: all 0.15s; }
+.go-share-btn:hover { background: rgba(68,220,170,0.25); border-color: rgba(68,220,170,0.6); color: #fff; }
+.go-share-btn.copied { background: rgba(68,220,170,0.2); color: #6fc; border-color: rgba(68,220,170,0.5); }
 .go-buttons { display: flex; gap: 16px; }
 /* === Loading Screen === */
 #loading-screen {
@@ -2418,14 +2427,24 @@ const STATES = {
             overlay.style.display = 'flex';
             document.getElementById('hud').style.display = 'none';
             document.getElementById('blocker').style.display = 'none';
-            // Populate stats
+            // Populate stats — "remain" framing
+            const kills = game.roundStats.kills;
+            const remain = Math.max(0, ENEMY_COUNT - kills);
             const mins = Math.floor(game.roundStats.survivalTime / 60);
             const secs = Math.floor(game.roundStats.survivalTime % 60);
             const timeStr = `${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
-            overlay.querySelector('.go-stats').innerHTML =
-                `Time Survived: <span>${timeStr}</span><br>` +
-                `Enemies Killed: <span>${game.roundStats.kills.toLocaleString()}</span><br>` +
-                `Shots Fired: <span>${game.roundStats.shotsFired}</span>`;
+            const accuracy = game.roundStats.shotsFired > 0
+                ? Math.min(100, Math.round(kills / game.roundStats.shotsFired * 100)) + '%'
+                : '\u2014';
+            // Hero number
+            overlay.querySelector('.go-remain').innerHTML =
+                `${remain.toLocaleString()}<span>REMAIN</span>`;
+            // Progress bar (fill = % remaining)
+            const pct = (remain / ENEMY_COUNT) * 100;
+            overlay.querySelector('.go-bar-fill').style.width = pct + '%';
+            // Stat line
+            overlay.querySelector('.go-stat-line').innerHTML =
+                `\u23F1 <span>${timeStr}</span> &nbsp;\u2502&nbsp; \uD83C\uDFAF <span>${accuracy}</span> &nbsp;\u2502&nbsp; \uD83D\uDC80 <span>${kills.toLocaleString()}</span>`;
             game.saveHighScore(game.roundStats);
             analytics.event('game_over', {
                 survival_time: Math.round(game.roundStats.survivalTime),
@@ -2750,13 +2769,57 @@ class Game {
     buildGameOverOverlay() {
         const el = document.getElementById('gameover-overlay');
         el.innerHTML = '';
+        // Title
         const title = document.createElement('div');
         title.className = 'go-title';
         title.textContent = 'GAME OVER';
         el.appendChild(title);
-        const stats = document.createElement('div');
-        stats.className = 'go-stats';
-        el.appendChild(stats);
+        // Remain count (hero number)
+        const remain = document.createElement('div');
+        remain.className = 'go-remain';
+        el.appendChild(remain);
+        // Progress bar
+        const bar = document.createElement('div');
+        bar.className = 'go-bar';
+        const barFill = document.createElement('div');
+        barFill.className = 'go-bar-fill';
+        bar.appendChild(barFill);
+        el.appendChild(bar);
+        // Stat line
+        const statLine = document.createElement('div');
+        statLine.className = 'go-stat-line';
+        el.appendChild(statLine);
+        // Share button
+        const shareBtn = document.createElement('button');
+        shareBtn.className = 'go-share-btn';
+        shareBtn.textContent = 'SHARE RESULTS';
+        shareBtn.onclick = () => {
+            const text = this.generateShareText();
+            navigator.clipboard.writeText(text).then(() => {
+                shareBtn.textContent = '\u2713 COPIED';
+                shareBtn.classList.add('copied');
+                setTimeout(() => {
+                    shareBtn.textContent = 'SHARE RESULTS';
+                    shareBtn.classList.remove('copied');
+                }, 2000);
+            }).catch(() => {
+                // Fallback: select text in a textarea
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                shareBtn.textContent = '\u2713 COPIED';
+                shareBtn.classList.add('copied');
+                setTimeout(() => {
+                    shareBtn.textContent = 'SHARE RESULTS';
+                    shareBtn.classList.remove('copied');
+                }, 2000);
+            });
+        };
+        el.appendChild(shareBtn);
+        // Play again / Main menu
         const buttons = document.createElement('div');
         buttons.className = 'go-buttons';
         const mkBtn = (text, fn) => {
@@ -2793,6 +2856,27 @@ class Game {
         try {
             return JSON.parse(localStorage.getItem('fps_highscores') || '[]');
         } catch (e) { return []; }
+    }
+
+    generateShareText() {
+        const kills = this.roundStats.kills;
+        const remain = Math.max(0, ENEMY_COUNT - kills);
+        const mins = Math.floor(this.roundStats.survivalTime / 60);
+        const secs = Math.floor(this.roundStats.survivalTime % 60);
+        const timeStr = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+        const accuracy = this.roundStats.shotsFired > 0
+            ? Math.min(100, Math.round(kills / this.roundStats.shotsFired * 100)) + '%'
+            : '\u2014';
+        // Progress bar: 20 chars, filled = remaining, empty = killed
+        const barLen = 20;
+        const filledCount = Math.round((remain / ENEMY_COUNT) * barLen);
+        const bar = '\u2588'.repeat(filledCount) + '\u2591'.repeat(barLen - filledCount);
+        return [
+            'MILLION2ONE',
+            `${bar} ${remain.toLocaleString()} remain`,
+            `\u23F1 ${timeStr} | \uD83C\uDFAF ${accuracy} | \uD83D\uDC80 ${kills.toLocaleString()}`,
+            'million2.one'
+        ].join('\n');
     }
 
     populateScores() {
