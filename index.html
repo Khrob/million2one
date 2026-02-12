@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>MILLION2ONE</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='4' fill='%23111'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-family='monospace' font-weight='bold' font-size='12' fill='%23e8a030'%3EM2O%3C/text%3E%3C/svg%3E">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -206,7 +207,8 @@ import {
     Fn, If, uniform, float, uint, int, vec2, vec3, vec4,
     instancedArray, instanceIndex, positionLocal,
     mix, step, clamp, floor, fract, hash, texture, time, pow,
-    smoothstep, abs, sin, cos, dot, normalize, max, min, add, mul
+    smoothstep, abs, sin, cos, dot, normalize, max, min, add, mul,
+    uv
 } from 'three/tsl';
 
 // ============================================================
@@ -362,7 +364,7 @@ const CFG = {
     enemies: { speed: 1.75, health: 33, damage: 8, attackRange: 3, attackRate: 1.0, size: 1.2, cullDistance: 1500, flowInfluence: 0.3 },
     weapon: { damage: 200, fireRate: 5, range: 500, maxAmmo: 30, spread: 0.015, hitRadius: 1.8, convergeDist: 60, barrelX: 0.2, barrelY: -0.14, barrelZ: -0.65 },
     handedness: 'left',  // 'left' = gun on left side (southpaw), 'right' = gun on right side
-    pickups: { healthCount: 12, ammoCount: 15, healthAmount: 30, ammoAmount: 10, bobSpeed: 2, bobHeight: 0.3, respawnTime: 15 },
+    pickups: { healthAmount: 50, ammoAmount: 15, bobSpeed: 2, bobHeight: 0.3, dropChance: 0.006, dropLifetime: 20 },
     lighting: { sunIntensity: 1.8, sunX: 0.5, sunY: 1.0, sunZ: 0.3, ambientIntensity: 0.45, fogNear: 400, fogFar: 1200, fogColor: '#adb8c7' },
     world: { size: 10000 },
     flowMap: { resolution: 64, updateInterval: 0.25 },
@@ -590,6 +592,7 @@ class GPUEnemySystem {
         this.velocities = instancedArray(ENEMY_COUNT, 'vec3');
         this.states = instancedArray(ENEMY_COUNT, 'vec4'); // x=health, y=type, z=maxHealth, w=flashTimer
         this.traits = instancedArray(ENEMY_COUNT, 'vec4'); // x=size(0.25-3.5), y=speed(0.3-3), z=toughness(0.3-3.5), w=aggression(0-1)
+        this.facings = instancedArray(ENEMY_COUNT, 'vec2'); // x=cosA, y=sinA (unit direction on XZ plane)
 
         // --- Uniforms (updated per frame) ---
         this.playerPosU = uniform(new THREE.Vector3());
@@ -649,7 +652,7 @@ class GPUEnemySystem {
         this.projPositionsTexture.wrapT = THREE.ClampToEdgeWrapping;
         this.projHitFlags = instancedArray(this.PROJ_POOL, 'uint');
         this.projHitFlagsAttr = this.projHitFlags.value; // raw attribute for readback
-        this.projCollisionRadiusU = uniform(0.8); // enemy half-size ~0.6 + projectile size 0.15
+        this.projCollisionRadiusU = uniform(CFG.enemies.size * 0.75 + CFG.projectile.size); // generous: 75% enemy size + projectile
         this._pendingHitPromise = null;
         this._hitResults = null;
 
@@ -722,6 +725,12 @@ class GPUEnemySystem {
             const tv = pos.z.div(ws).add(0.5).clamp(0.001, 0.999);
             pos.y.assign(heightTex.sample(vec2(tu, tv)).x.add(0.5).add(sz.mul(trait.x).mul(0.6)));
             vel.assign(vec3(0, 0, 0));
+
+            // --- Facing: random initial direction (unit vec2) ---
+            const facing = this.facings.element(instanceIndex);
+            const fAngle = hash(instanceIndex.add(50)).mul(Math.PI * 2);
+            facing.x.assign(fAngle.cos());
+            facing.y.assign(fAngle.sin());
 
             // --- State: health scales with toughness ---
             const enemyMaxHp = maxHp.mul(trait.z);
@@ -804,6 +813,18 @@ class GPUEnemySystem {
                 const totalSlow = closeSlowdown.mul(densitySlowdown).mul(slopeSpeed);
                 pos.x.addAssign(moveX.div(moveLen).mul(spd).mul(speedVar).mul(totalSlow).mul(dt));
                 pos.z.addAssign(moveZ.div(moveLen).mul(spd).mul(speedVar).mul(totalSlow).mul(dt));
+
+                // Smooth facing update: lerp toward movement direction
+                const facing = this.facings.element(instanceIndex);
+                const targetCos = moveX.div(moveLen);
+                const targetSin = moveZ.div(moveLen);
+                const turnRate = dt.mul(8).clamp(0, 1); // smooth turning (~8 rad/s)
+                facing.x.assign(mix(facing.x, targetCos, turnRate));
+                facing.y.assign(mix(facing.y, targetSin, turnRate));
+                // Renormalize to prevent drift
+                const fLen = facing.x.mul(facing.x).add(facing.y.mul(facing.y)).sqrt().max(float(0.001));
+                facing.x.divAssign(fLen);
+                facing.y.divAssign(fLen);
             });
         })().compute(ENEMY_COUNT);
 
@@ -1006,9 +1027,9 @@ class GPUEnemySystem {
 
         // Non-uniform scaling: per-enemy size trait (0.25–3.5) + wild hash-derived proportions
         const sizeTrait = instTrait.x;
-        const scaleW = sizeTrait.mul(float(0.5).add(hash(instanceIndex.add(40)).mul(1.0))); // 50–150% width
+        const scaleW = sizeTrait.mul(float(0.3).add(hash(instanceIndex.add(40)).mul(0.6))); // tangent (thinner: 30–90%)
         const scaleH = sizeTrait.mul(float(0.4).add(hash(instanceIndex.add(41)).mul(1.4))); // 40–180% height (lanky vs squat)
-        const scaleD = sizeTrait.mul(float(0.5).add(hash(instanceIndex.add(42)).mul(1.0))); // 50–150% depth
+        const scaleD = sizeTrait.mul(float(0.5).add(hash(instanceIndex.add(42)).mul(1.0))); // 50–150% facing depth
         const aliveScaleVec = vec3(
             this.enemySizeU.mul(scaleW),
             this.enemySizeU.mul(scaleH),
@@ -1016,11 +1037,23 @@ class GPUEnemySystem {
         );
         // Dead: 1/5 size. Scalar mix avoids vec3 mix issues in TSL.
         const lifeScale = mix(float(0.2), float(1.0), isAlive).mul(inRange);
-        material.positionNode = vec3(
-            positionLocal.x.mul(aliveScaleVec.x).mul(lifeScale),
-            positionLocal.y.mul(aliveScaleVec.y).mul(lifeScale),
-            positionLocal.z.mul(aliveScaleVec.z).mul(lifeScale)
-        ).add(instPos);
+
+        // Scale in local space first — taper X toward the front for a wedge silhouette
+        // positionLocal.z: -0.5 (back) → +0.5 (front). Taper: back=full width, front=30%
+        const taper = mix(float(1.0), float(0.3), positionLocal.z.add(0.5));
+        const scaledX = positionLocal.x.mul(aliveScaleVec.x).mul(lifeScale).mul(taper);
+        const scaledY = positionLocal.y.mul(aliveScaleVec.y).mul(lifeScale);
+        const scaledZ = positionLocal.z.mul(aliveScaleVec.z).mul(lifeScale);
+
+        // Face stored direction: read pre-computed facing (cosA, sinA) from GPU array
+        const instFacing = this.facings.element(instanceIndex);
+        const cosA = instFacing.x;
+        const sinA = instFacing.y;
+        // Rotate scaled local position around Y axis
+        const rotX = scaledX.mul(cosA).add(scaledZ.mul(sinA));
+        const rotZ = scaledZ.mul(cosA).sub(scaledX.mul(sinA));
+
+        material.positionNode = vec3(rotX, scaledY, rotZ).add(instPos);
 
         // Trait-driven base color: speed→purple, toughness→green, aggression→red
         const tSpeed = instTrait.y.div(3.0).clamp(0, 1);  // normalize 0–3 → 0–1
@@ -1119,6 +1152,7 @@ class GPUEnemySystem {
         this.weaponDamageU.value = CFG.weapon.damage;
         this.weaponRangeU.value = CFG.weapon.range;
         this.hitRadiusU.value = CFG.weapon.hitRadius;
+        this.projCollisionRadiusU.value = CFG.enemies.size * 0.75 + CFG.projectile.size;
 
         // Flow map update
         this.flowMapTimer -= dt;
@@ -1355,7 +1389,10 @@ class GPUParticleSystem {
         material.positionNode = this.positions.toAttribute();
         material.scaleNode = instLife.z.mul(alive).mul(fadeT);
         material.colorNode = instColor;
-        material.opacityNode = fadeT.mul(fadeT).mul(alive).mul(0.9);
+        material.opacityNode = fadeT.mul(fadeT).mul(alive).mul(0.8);
+
+        // Random rotation per particle — breaks up the uniform square look cheaply
+        material.rotationNode = hash(instanceIndex).mul(Math.PI * 2);
 
         const sprite = new THREE.Sprite(material);
         sprite.count = this.POOL_SIZE;
@@ -1368,6 +1405,7 @@ class GPUParticleSystem {
         const presets = {
             blood:     { speed: 8,  spread: 1.5, life: 0.8,  size: 0.5, color: [0.8, 0.05, 0.02], gravity: 1.2 },
             muzzle:    { speed: 4,  spread: 0.4, life: 0.12, size: 0.2, color: [1.0, 0.9, 0.3],   gravity: 0 },
+            exhaust:   { speed: 18, spread: 0.6, life: 0.4,  size: 0.35,color: [1.0, 0.8, 0.3],   gravity: 0.2 },
             trail:     { speed: 0.3,spread: 0.08,life: 3.0,  size: 0.15,color: [1.0, 0.7, 0.2],   gravity: 0.0 },
             explosion: { speed: 14, spread: 2.0, life: 1.2,  size: 0.7, color: [1.0, 0.5, 0.1],   gravity: 0.8 },
             spark:     { speed: 20, spread: 0.8, life: 0.5,  size: 0.1, color: [1.0, 0.95, 0.6],  gravity: 0.3 },
@@ -1681,41 +1719,119 @@ class Player {
 // ============================================================
 class Pickup {
     constructor(scene, terrain, type, position) {
-        this.terrain = terrain; this.type = type; this.active = true; this.respawnTimer = 0;
-        const size = 0.6;
-        const color = type === 'health' ? 0x44ff44 : 0xffcc22;
-        const geo = type === 'health' ? new THREE.OctahedronGeometry(size * 0.6) : new THREE.BoxGeometry(size, size, size);
-        this.mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color, emissive: color, emissiveIntensity: 0.2 }));
+        this.terrain = terrain; this.type = type; this.active = true;
+        this.lifetime = CFG.pickups.dropLifetime || 20;
+        this.age = 0;
+        const size = 0.7;
+        const color = type === 'health' ? 0x00ff44 : 0xff8800;
+        const geo = new THREE.TetrahedronGeometry(size);
+        this.mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color }));
+        this.mesh.scale.set(1, 6.6, 1);  // tall and pointy — 3x previous
+        // Spawn at hit position, then arc outward
         this.mesh.position.copy(position);
-        this.baseY = terrain.getHeight(position.x, position.z) + 1.2;
-        this.mesh.position.y = this.baseY;
+        this.mesh.position.y = position.y || terrain.getHeight(position.x, position.z) + 1;
+        const hoverY = terrain.getHeight(position.x, position.z) + CFG.player.height * 0.85;
+        this.targetY = hoverY;  // chest height
+        // Launch arc: random horizontal direction + upward
+        const angle = Math.random() * Math.PI * 2;
+        const hSpeed = 6 + Math.random() * 6;
+        this.vel = new THREE.Vector3(Math.cos(angle) * hSpeed, 12 + Math.random() * 6, Math.sin(angle) * hSpeed);
+        this.launched = true;  // in arc phase
+        this.mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
         scene.add(this.mesh);
     }
     update(dt, playerPos) {
-        if (!this.active) { this.respawnTimer -= dt; if (this.respawnTimer <= 0) { this.active = true; this.mesh.visible = true; } return null; }
-        const t = performance.now() / 1000;
-        this.mesh.position.y = this.baseY + Math.sin(t * CFG.pickups.bobSpeed) * CFG.pickups.bobHeight;
-        this.mesh.rotation.y += dt * 2;
+        if (!this.active) return null;
+        this.age += dt;
+        if (this.age > this.lifetime) { this.active = false; this.mesh.visible = false; return null; }
+        // Fade out in last 3 seconds
+        const fadeStart = this.lifetime - 3;
+        if (this.age > fadeStart) {
+            const fade = 1 - (this.age - fadeStart) / 3;
+            this.mesh.material.opacity = fade;
+            this.mesh.material.transparent = true;
+        }
+        if (this.launched) {
+            // Arc phase: physics sim
+            this.vel.y -= 28 * dt;  // gravity
+            this.mesh.position.addScaledVector(this.vel, dt);
+            // Tumble during flight
+            this.mesh.rotation.x += dt * 8;
+            this.mesh.rotation.z += dt * 5;
+            // Land when falling and at/below hover height
+            const groundY = this.terrain.getHeight(this.mesh.position.x, this.mesh.position.z);
+            this.targetY = groundY + CFG.player.height * 0.85;
+            if (this.vel.y < 0 && this.mesh.position.y <= this.targetY) {
+                this.mesh.position.y = this.targetY;
+                this.launched = false;
+                // Snap rotation to upright for clean spin
+                this.mesh.rotation.set(0, this.mesh.rotation.y, 0);
+            }
+            // Don't go below ground
+            if (this.mesh.position.y < groundY + 0.5) {
+                this.mesh.position.y = groundY + 0.5;
+                this.launched = false;
+                this.mesh.rotation.set(0, this.mesh.rotation.y, 0);
+            }
+        } else {
+            // Idle: bob gently + spin on Y axis
+            const t = performance.now() / 1000;
+            const groundY = this.terrain.getHeight(this.mesh.position.x, this.mesh.position.z);
+            this.targetY = groundY + CFG.player.height * 0.85;
+            this.mesh.position.y = this.targetY + Math.sin(t * CFG.pickups.bobSpeed + this.age) * CFG.pickups.bobHeight;
+            this.mesh.rotation.y += dt * 3;
+        }
+        // Collection check
         const dx = playerPos.x - this.mesh.position.x, dz = playerPos.z - this.mesh.position.z;
-        if (Math.sqrt(dx*dx + dz*dz) < 2.5) { this.active = false; this.mesh.visible = false; this.respawnTimer = CFG.pickups.respawnTime; return this.type; }
+        if (Math.sqrt(dx*dx + dz*dz) < 3.5) { this.active = false; this.mesh.visible = false; return this.type; }
         return null;
     }
+    dispose(scene) { scene.remove(this.mesh); this.mesh.geometry.dispose(); this.mesh.material.dispose(); }
 }
 
 class PickupManager {
-    constructor(scene, terrain) { this.scene = scene; this.terrain = terrain; this.pickups = []; }
+    constructor(scene, terrain) {
+        this.scene = scene; this.terrain = terrain; this.pickups = [];
+        this.recentHitPositions = [];  // ring buffer of recent hit/explosion positions
+        this.MAX_DROPS = 60;           // max active pickups on the ground
+    }
     spawnAll() {
-        this.pickups.forEach(p => this.scene.remove(p.mesh));
+        // Clear any existing pickups (called on round start / terrain regen)
+        this.pickups.forEach(p => p.dispose(this.scene));
         this.pickups = [];
-        const half = CFG.world.size * 0.4;
-        for (let i = 0; i < CFG.pickups.healthCount; i++) { const x = (Math.random()-0.5)*half*2, z = (Math.random()-0.5)*half*2; this.pickups.push(new Pickup(this.scene, this.terrain, 'health', new THREE.Vector3(x,0,z))); }
-        for (let i = 0; i < CFG.pickups.ammoCount; i++) { const x = (Math.random()-0.5)*half*2, z = (Math.random()-0.5)*half*2; this.pickups.push(new Pickup(this.scene, this.terrain, 'ammo', new THREE.Vector3(x,0,z))); }
+        this.recentHitPositions = [];
+    }
+    recordHitPosition(pos) {
+        this.recentHitPositions.push(pos.clone());
+        if (this.recentHitPositions.length > 20) this.recentHitPositions.shift();
+    }
+    spawnDrops(newKills) {
+        // For each kill, chance to drop a pickup at a recent hit position
+        const dropChance = CFG.pickups.dropChance || 0.12;
+        for (let i = 0; i < newKills; i++) {
+            if (Math.random() > dropChance) continue;
+            if (this.pickups.filter(p => p.active).length >= this.MAX_DROPS) break;
+            // Pick a position: use recent hit pos if available, else skip
+            const pos = this.recentHitPositions.length > 0
+                ? this.recentHitPositions[Math.floor(Math.random() * this.recentHitPositions.length)]
+                : null;
+            if (!pos) continue;
+            // Add some random scatter so drops aren't all stacked
+            const dropPos = pos.clone();
+            dropPos.x += (Math.random() - 0.5) * 4;
+            dropPos.z += (Math.random() - 0.5) * 4;
+            const type = Math.random() < 0.5 ? 'health' : 'ammo';
+            this.pickups.push(new Pickup(this.scene, this.terrain, type, dropPos));
+        }
     }
     update(dt, player) {
-        for (const p of this.pickups) {
+        for (let i = this.pickups.length - 1; i >= 0; i--) {
+            const p = this.pickups[i];
             const r = p.update(dt, player.position);
             if (r === 'health') player.health = Math.min(CFG.player.maxHealth, player.health + CFG.pickups.healthAmount);
             else if (r === 'ammo') player.ammo = Math.min(CFG.weapon.maxAmmo, player.ammo + CFG.pickups.ammoAmount);
+            // Remove inactive pickups to free memory
+            if (!p.active) { p.dispose(this.scene); this.pickups.splice(i, 1); }
         }
     }
 }
@@ -2276,7 +2392,7 @@ class DebugOverlay {
         const mkBtn = (text, fn) => { const b = document.createElement('button'); b.className = 'debug-btn'; b.textContent = text; b.onclick = fn; btns.appendChild(b); };
         mkBtn('Regen Terrain', () => this.game.regenerateTerrain());
         mkBtn('Respawn Enemies', () => this.game.respawnEnemies());
-        mkBtn('Respawn Pickups', () => this.game.pickupManager.spawnAll());
+        mkBtn('Clear Pickups', () => this.game.pickupManager.spawnAll());
         mkBtn('Full Heal + Ammo', () => { this.game.player.health = CFG.player.maxHealth; this.game.player.ammo = CFG.weapon.maxAmmo; });
         mkBtn('Teleport Center', () => { const g = this.game; g.player.position.set(0, g.terrain.getHeight(0,0)+CFG.player.height, 0); });
         this.el.appendChild(btns);
@@ -2582,11 +2698,15 @@ const STATES = {
                 game.roundStats.shotsFired++;
                 game.particles.emit(shot.origin, shot.direction, CFG.particles.muzzleCount, 'muzzle');
                 game.renderer.compute(game.particles.computeSpawn);
+                // Launch exhaust burst — big plume behind the projectile
+                game.particles.emit(shot.origin, shot.direction, 40, 'exhaust');
+                game.renderer.compute(game.particles.computeSpawn);
                 game.projectiles.fire(shot.origin, shot.direction);
                 game.audio.play('gunshot');
             }
             // --- Helper: trigger explosion at a point ---
             const triggerExplosion = (impactPos) => {
+                game.pickupManager.recordHitPosition(impactPos);
                 const upDir = new THREE.Vector3(0, 1, 0);
                 game.particles.emit(impactPos, upDir, CFG.particles.explosionCount, 'explosion');
                 game.renderer.compute(game.particles.computeSpawn);
@@ -3318,6 +3438,8 @@ class Game {
             const kc = this._kcJuice;
             const newKills = killCount - kc.prevKills;
             if (newKills > 0) {
+                // Spawn pickup drops from kills
+                this.pickupManager.spawnDrops(newKills);
                 kc.streak += newKills;
                 if (kc.streak > kc.maxStreak) kc.maxStreak = kc.streak;
                 kc.idleTime = 0;
