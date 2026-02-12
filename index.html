@@ -415,7 +415,7 @@ const CFG = {
     world: { size: 10000 },
     flowMap: { resolution: 64, updateInterval: 0.25 },
     particles: { poolSize: 2097152, muzzleCount: 12, trailCount: 20, bloodCount: 25, sparkCount: 15, explosionCount: 50, explosionSparkCount: 30 },
-    projectile: { speed: 120, gravity: 30, size: 0.15, maxLife: 5, poolSize: 32, trailInterval: 0.05, explosionRadius: 25, explosionForce: 40, explosionDamage: 60 },
+    projectile: { speed: 120, gravity: 30, size: 0.15, maxLife: 5, poolSize: 64, trailInterval: 0.05, explosionRadius: 25, explosionForce: 40, explosionDamage: 60 },
     audio: { masterVolume: 0.7, sfxVolume: 0.8, musicVolume: 0.3, maxSounds: 24, spatialRefDist: 10, spatialMaxDist: 500, spatialRolloff: 1 },
     debug: { damageFlash: true, godMode: false }
 };
@@ -685,8 +685,8 @@ class GPUEnemySystem {
         this.densityGrid = instancedArray(this.DENSITY_RES * this.DENSITY_RES, 'uint');
 
         // --- Projectile collision (GPU-side hit detection) ---
-        this.PROJ_POOL = CFG.projectile.poolSize; // 32
-        // 32×2 texture: row 0 = current pos, row 1 = previous pos (for swept collision)
+        this.PROJ_POOL = CFG.projectile.poolSize;
+        // N×2 texture: row 0 = current pos, row 1 = previous pos (for swept collision)
         this.projPositionsData = new Float32Array(this.PROJ_POOL * 4 * 2);
         this.projPositionsTexture = new THREE.DataTexture(
             this.projPositionsData, this.PROJ_POOL, 2,
@@ -1448,7 +1448,8 @@ class GPUParticleSystem {
     }
 
     // Queue a spawn and return true. Caller must dispatch computeSpawn after.
-    emit(pos, dir, count, type) {
+    // overrides: optional object to override preset values (color, size, life, etc.)
+    emit(pos, dir, count, type, overrides) {
         const presets = {
             blood:     { speed: 8,  spread: 1.5, life: 0.8,  size: 0.5, color: [0.8, 0.05, 0.02], gravity: 1.2 },
             muzzle:    { speed: 4,  spread: 0.4, life: 0.08, size: 0.08,color: [1.0, 0.9, 0.3],   gravity: 0 },
@@ -1457,7 +1458,7 @@ class GPUParticleSystem {
             explosion: { speed: 14, spread: 2.0, life: 1.2,  size: 0.7, color: [1.0, 0.5, 0.1],   gravity: 0.8 },
             spark:     { speed: 20, spread: 0.8, life: 0.5,  size: 0.1, color: [1.0, 0.95, 0.6],  gravity: 0.3 },
         };
-        const cfg = presets[type] || presets.muzzle;
+        const cfg = overrides ? Object.assign({}, presets[type] || presets.muzzle, overrides) : (presets[type] || presets.muzzle);
         count = Math.min(count, this.MAX_SPAWN);
 
         // Pool overflow check
@@ -1506,7 +1507,7 @@ class ExplosionSpherePool {
         }
         this.nextIdx = 0;
     }
-    spawn(position, radius) {
+    spawn(position, radius, damageNorm) {
         const s = this.pool[this.nextIdx];
         this.nextIdx = (this.nextIdx + 1) % this.pool.length;
         s.mesh.position.copy(position);
@@ -1516,6 +1517,9 @@ class ExplosionSpherePool {
         s.mesh.visible = true;
         s.mesh.scale.setScalar(0.1);
         s.mat.opacity = 0.35;
+        // Color shifts with damage: orange (low) → bright pink-white (high)
+        const dn = damageNorm || 0.5;
+        s.mat.color.setRGB(1.0, 0.55 - dn * 0.25, 0.13 + dn * 0.25);
     }
     update(dt) {
         for (const s of this.pool) {
@@ -1540,17 +1544,17 @@ class ProjectileSystem {
         this.POOL_SIZE = CFG.projectile.poolSize;
         this.pool = [];
         const geo = new THREE.SphereGeometry(CFG.projectile.size, 6, 6);
-        const mat = new THREE.MeshBasicMaterial({ color: 0xffdd44 });
         for (let i = 0; i < this.POOL_SIZE; i++) {
+            const mat = new THREE.MeshBasicMaterial({ color: 0xffdd44 });
             const mesh = new THREE.Mesh(geo, mat);
             mesh.visible = false;
             scene.add(mesh);
-            this.pool.push({ mesh, pos: new THREE.Vector3(), prevPos: new THREE.Vector3(), vel: new THREE.Vector3(), active: false, life: 0, trailTimer: 0 });
+            this.pool.push({ mesh, mat, pos: new THREE.Vector3(), prevPos: new THREE.Vector3(), vel: new THREE.Vector3(), active: false, life: 0, trailTimer: 0, powerNorm: 0.5, speedNorm: 0.5 });
         }
         this.nextIdx = 0;
     }
 
-    fire(origin, direction, speed, damage) {
+    fire(origin, direction, speed, damage, wpnParams) {
         const p = this.pool[this.nextIdx];
         this.nextIdx = (this.nextIdx + 1) % this.POOL_SIZE;
         p.pos.copy(origin);
@@ -1562,6 +1566,16 @@ class ProjectileSystem {
         p.trailTimer = 0;
         p.mesh.visible = true;
         p.mesh.position.copy(origin);
+
+        // Visual differentiation based on weapon params
+        const pw = wpnParams ? wpnParams.power / 255 : 0.5;
+        const sp = wpnParams ? wpnParams.speed / 255 : 0.5;
+        p.powerNorm = pw;
+        p.speedNorm = sp;
+        // Color: yellow (low power) → orange → red/magenta (high power)
+        p.mat.color.setRGB(1.0, 0.9 - pw * 0.7, 0.3 - pw * 0.15 + (pw > 0.7 ? (pw - 0.7) * 1.0 : 0));
+        // Size: 0.6x (low power) → 2.5x (high power) relative to base
+        p.mesh.scale.setScalar(0.6 + pw * 1.9);
     }
 
     update(dt, particles, renderer) {
@@ -1575,11 +1589,17 @@ class ProjectileSystem {
             p.vel.y -= CFG.projectile.gravity * dt;
             p.pos.addScaledVector(p.vel, dt);
             p.mesh.position.copy(p.pos);
-            // Trail particles
+            // Trail particles — vary with weapon params
             p.trailTimer -= dt;
             if (p.trailTimer <= 0) {
                 p.trailTimer = CFG.projectile.trailInterval;
-                particles.emit(p.pos, new THREE.Vector3(0, 0, 0), CFG.particles.trailCount, 'trail');
+                const pw = p.powerNorm, sp = p.speedNorm;
+                const trailOvr = {
+                    life: 0.5 + sp * 2.5,                             // 0.5s (slow) → 3.0s (fast)
+                    size: 0.04 + pw * 0.12,                           // tiny → chunky with power
+                    color: [1.0, 0.7 - pw * 0.5, 0.2 - pw * 0.12],  // yellow → red with power
+                };
+                particles.emit(p.pos, new THREE.Vector3(0, 0, 0), CFG.particles.trailCount, 'trail', trailOvr);
                 renderer.compute(particles.computeSpawn);
             }
             // Life timeout
@@ -1625,6 +1645,7 @@ class Player {
             { spread: 255, rate: 255, power: 255, speed: 255 }, // 9: GIVE IT ALL YOU'VE GOT
         ];
         this.heat = 0;
+        this.barrelGlow = 0; // 0–1: barrel emissive glow from high rate firing
         this.adjustingParam = null; // which param key 1-4 is held
         this.adjustMouseAccum = 0;
         this.position.set(0, this.terrain.getHeight(0, 0) + CFG.player.height, 0);
@@ -1761,6 +1782,20 @@ class Player {
         this.muzzleFlash.material.opacity *= 0.85;
         if (this.muzzleFlash.material.opacity < 0.01) this.muzzleFlash.material.opacity = 0;
 
+        // Barrel glow: accumulates when shooting at high rate, decays when idle
+        const rateNorm = this.wpnParams.rate / 255;
+        if (this.shooting && rateNorm > 0.2) {
+            this.barrelGlow = Math.min(1, this.barrelGlow + rateNorm * dt * 4);
+        } else {
+            this.barrelGlow = Math.max(0, this.barrelGlow - dt * 2.5);
+        }
+        if (this.gunBarrel && this.barrelGlow > 0.01) {
+            const g = this.barrelGlow;
+            this.gunBarrel.material.emissive.setRGB(g * 0.9, g * 0.15, 0);
+        } else if (this.gunBarrel) {
+            this.gunBarrel.material.emissive.setRGB(0, 0, 0);
+        }
+
         // Passive heat cooling
         if (this.heat > 0) {
             this.heat = Math.max(0, this.heat - CFG.heat.coolRate * dt);
@@ -1794,27 +1829,40 @@ class Player {
         }
 
         this.fireTimer = 1 / this.getFireRate();
-        this.muzzleFlash.material.opacity = 1;
         this.pitch += 0.01;
         this.weaponGroup.position.z = 0.04;
 
-        // Camera-center aim direction with weapon spread
+        // Multi-pellet: high spread = more pellets, each with split damage
+        const spreadNorm = this.wpnParams.spread / 255;
+        const pelletCount = 1 + Math.floor(spreadNorm * 5); // 1–6 pellets
+        const totalDamage = this.getDamage();
+        const pelletDamage = totalDamage / pelletCount;
+        const speed = this.getProjectileSpeed();
         const spread = this.getSpread();
-        const aimDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
-        aimDir.x += (Math.random() - 0.5) * spread;
-        aimDir.y += (Math.random() - 0.5) * spread;
-        aimDir.normalize();
 
-        // Barrel offset in camera-local space (matches the viewmodel gun position)
+        // Muzzle flash: size scales with spread, color with power
+        const pw = this.wpnParams.power / 255;
+        this.muzzleFlash.scale.setScalar(1 + spreadNorm * 2.5); // 1x → 3.5x
+        this.muzzleFlash.material.color.setRGB(1.0, 0.95 - pw * 0.55, 0.4 - pw * 0.3);
+        this.muzzleFlash.material.opacity = 1;
+
         const side = this.handSide || (CFG.handedness === 'left' ? -1 : 1);
-        const barrelOffset = new THREE.Vector3(CFG.weapon.barrelX * side, CFG.weapon.barrelY, CFG.weapon.barrelZ);
-        const barrelWorldPos = barrelOffset.applyQuaternion(this.camera.quaternion).add(this.camera.position);
+        const shots = [];
+        for (let i = 0; i < pelletCount; i++) {
+            // Each pellet gets its own random spread offset
+            const aimDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+            aimDir.x += (Math.random() - 0.5) * spread;
+            aimDir.y += (Math.random() - 0.5) * spread;
+            aimDir.normalize();
 
-        // Convergence: aim barrel shot towards where the crosshair hits at convergeDist
-        const convergePoint = this.camera.position.clone().addScaledVector(aimDir, CFG.weapon.convergeDist);
-        const barrelDir = convergePoint.sub(barrelWorldPos).normalize();
+            const barrelOffset = new THREE.Vector3(CFG.weapon.barrelX * side, CFG.weapon.barrelY, CFG.weapon.barrelZ);
+            const barrelWorldPos = barrelOffset.applyQuaternion(this.camera.quaternion).add(this.camera.position);
+            const convergePoint = this.camera.position.clone().addScaledVector(aimDir, CFG.weapon.convergeDist);
+            const barrelDir = convergePoint.sub(barrelWorldPos).normalize();
 
-        return { origin: barrelWorldPos, direction: barrelDir, speed: this.getProjectileSpeed(), damage: this.getDamage() };
+            shots.push({ origin: barrelWorldPos, direction: barrelDir, speed, damage: pelletDamage });
+        }
+        return shots; // Array of pellet shots
     }
 
     reload() { this.ammo = CFG.weapon.maxAmmo; }
@@ -2023,7 +2071,8 @@ class AudioEngine {
     }
 
     // Play a synth preset. pos=null → non-positional (player's own gun etc.)
-    play(preset, pos = null) {
+    // params: optional extra data passed to the synth (e.g. wpnParams for gunshot)
+    play(preset, pos = null, params = null) {
         if (this.activeSounds >= CFG.audio.maxSounds) return;
         if (this.ctx.state === 'suspended') return;
 
@@ -2040,54 +2089,68 @@ class AudioEngine {
         };
 
         const synth = this['_' + preset];
-        if (synth) synth.call(this, dest, v, done);
+        if (synth) synth.call(this, dest, v, done, params);
     }
 
     // === SYNTH PRESETS ===
 
-    // Gunshot: noise crack + sawtooth thump + distortion
-    _gunshot(dest, v, done) {
+    // Gunshot: noise crack + sawtooth thump + snap — parameterized by weapon state
+    // Power → deeper bass, longer decay, more distortion
+    // Speed → sharper crack/snap transient
+    // Spread → wider noise band (lower Q), broader character
+    // Rate → shorter envelope (staccato at high rate)
+    _gunshot(dest, v, done, wpnParams) {
         const ctx = this.ctx, now = ctx.currentTime;
+        const pw = wpnParams ? wpnParams.power / 255 : 0.5;
+        const sp = wpnParams ? wpnParams.speed / 255 : 0.5;
+        const sd = wpnParams ? wpnParams.spread / 255 : 0.5;
+        const rt = wpnParams ? wpnParams.rate / 255 : 0.5;
 
-        // Noise crack
+        // Envelope shortens at high rate (staccato bursts)
+        const envScale = 1.0 - rt * 0.4; // 1.0 → 0.6
+
+        // Noise crack — spread widens band, power adds volume
         const noise = ctx.createBufferSource();
         noise.buffer = this._noise(0.1);
         const filter = ctx.createBiquadFilter();
         filter.type = 'bandpass';
-        filter.frequency.setValueAtTime(2500 + v * 3000, now);
-        filter.frequency.exponentialRampToValueAtTime(400, now + 0.06);
-        filter.Q.value = 1.5;
+        filter.frequency.setValueAtTime(2000 + v * 2000 + sp * 2000, now);
+        filter.frequency.exponentialRampToValueAtTime(200 + pw * 400, now + 0.06 * envScale);
+        filter.Q.value = 0.8 + (1 - sd) * 3; // wide spread = low Q (broad), tight = high Q (focused)
         const dist = ctx.createWaveShaper();
         dist.curve = this._distCurve;
         const nGain = ctx.createGain();
-        nGain.gain.setValueAtTime(0.5, now);
-        nGain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+        nGain.gain.setValueAtTime(0.3 + pw * 0.4 + sd * 0.1, now);
+        nGain.gain.exponentialRampToValueAtTime(0.001, now + 0.07 * envScale);
         noise.connect(filter); filter.connect(dist); dist.connect(nGain); nGain.connect(dest);
 
-        // Thump body
+        // Thump body — power deepens pitch and adds weight
         const osc = ctx.createOscillator();
         osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(130 + v * 40, now);
-        osc.frequency.exponentialRampToValueAtTime(35, now + 0.06);
+        const baseFreq = 180 - pw * 120; // 180Hz (plinky) → 60Hz (deep boom)
+        osc.frequency.setValueAtTime(baseFreq + v * 20, now);
+        osc.frequency.exponentialRampToValueAtTime(20 + (1 - pw) * 25, now + 0.06 * envScale);
         const oGain = ctx.createGain();
-        oGain.gain.setValueAtTime(0.35, now);
-        oGain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+        oGain.gain.setValueAtTime(0.2 + pw * 0.35, now);
+        oGain.gain.exponentialRampToValueAtTime(0.001, now + 0.05 * envScale);
         osc.connect(oGain); oGain.connect(dest);
 
-        // Snap transient (short high sine)
+        // Snap transient — speed sharpens and brightens
         const snap = ctx.createOscillator();
         snap.type = 'sine';
-        snap.frequency.setValueAtTime(4000 + v * 2000, now);
-        snap.frequency.exponentialRampToValueAtTime(1000, now + 0.015);
+        const snapFreq = 3000 + sp * 4000; // 3kHz (slow) → 7kHz (supersonic crack)
+        snap.frequency.setValueAtTime(snapFreq + v * 1000, now);
+        snap.frequency.exponentialRampToValueAtTime(800, now + 0.015 * envScale);
         const sGain = ctx.createGain();
-        sGain.gain.setValueAtTime(0.15, now);
-        sGain.gain.exponentialRampToValueAtTime(0.001, now + 0.02);
+        sGain.gain.setValueAtTime(0.08 + sp * 0.2, now);
+        sGain.gain.exponentialRampToValueAtTime(0.001, now + 0.02 * envScale);
         snap.connect(sGain); sGain.connect(dest);
 
-        noise.start(now); noise.stop(now + 0.1);
-        osc.start(now); osc.stop(now + 0.08);
-        snap.start(now); snap.stop(now + 0.025);
-        done([noise, filter, dist, nGain, osc, oGain, snap, sGain], 0.15);
+        const dur = (0.1 + pw * 0.05) * envScale;
+        noise.start(now); noise.stop(now + dur + 0.02);
+        osc.start(now); osc.stop(now + dur);
+        snap.start(now); snap.stop(now + 0.03 * envScale);
+        done([noise, filter, dist, nGain, osc, oGain, snap, sGain], dur + 0.05);
     }
 
     // Explosion: layered noise + deep bass + sub rumble
@@ -2437,6 +2500,142 @@ class AudioEngine {
         // Volume: quiet at threshold, screaming near max
         const vol = intensity * intensity * 0.18;
         hw.gain.gain.setTargetAtTime(vol, now, 0.05);
+    }
+
+    // Continuous rate buzz — gatling "BRRRT" undertone at high fire rates
+    // Call every frame with current weapon params and shooting state
+    updateRateBuzz(wpnParams, isShooting) {
+        const rateNorm = wpnParams ? wpnParams.rate / 255 : 0;
+        const threshold = 0.45; // kicks in around 45% rate
+
+        if (!isShooting || rateNorm < threshold) {
+            if (this._rateBuzz) {
+                this._rateBuzz.gain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.08);
+            }
+            return;
+        }
+        const intensity = (rateNorm - threshold) / (1 - threshold);
+
+        if (!this._rateBuzz) {
+            const ctx = this.ctx;
+            // Dual oscillator buzz: sawtooth + square through lowpass + distortion
+            const osc = ctx.createOscillator();
+            osc.type = 'sawtooth';
+            osc.frequency.value = 70;
+            const osc2 = ctx.createOscillator();
+            osc2.type = 'square';
+            osc2.frequency.value = 105;
+            const filter = ctx.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.value = 500;
+            filter.Q.value = 2;
+            const dist = ctx.createWaveShaper();
+            dist.curve = this._distCurve;
+            const gain = ctx.createGain();
+            gain.gain.value = 0;
+            osc.connect(filter);
+            osc2.connect(filter);
+            filter.connect(dist);
+            dist.connect(gain);
+            gain.connect(this.sfxGain);
+            osc.start();
+            osc2.start();
+            this._rateBuzz = { osc, osc2, filter, dist, gain };
+        }
+        const rb = this._rateBuzz;
+        const now = this.ctx.currentTime;
+        // Buzz pitch rises with rate
+        rb.osc.frequency.setTargetAtTime(60 + intensity * 50, now, 0.05);
+        rb.osc2.frequency.setTargetAtTime(90 + intensity * 70, now, 0.05);
+        rb.filter.frequency.setTargetAtTime(400 + intensity * 800, now, 0.05);
+        // Volume: subtle undertone, gets louder near max rate
+        const vol = intensity * intensity * 0.12;
+        rb.gain.gain.setTargetAtTime(vol, now, 0.05);
+    }
+
+    // Continuous vent sound — hissing/rocket roar while venting heat
+    // Call every frame: isVenting = true when R held + heat > 0, heatNorm = heat / maxHeat
+    updateVentSound(isVenting, heatNorm) {
+        if (!isVenting || heatNorm <= 0) {
+            if (this._ventSound) {
+                this._ventSound.gain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.06);
+            }
+            return;
+        }
+
+        if (!this._ventSound) {
+            const ctx = this.ctx;
+            // White noise source (looping buffer) — the hiss
+            const noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+            const data = noiseBuf.getChannelData(0);
+            for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+            const noise = ctx.createBufferSource();
+            noise.buffer = noiseBuf;
+            noise.loop = true;
+
+            // Bandpass filter: shapes the hiss character
+            const hissFilter = ctx.createBiquadFilter();
+            hissFilter.type = 'bandpass';
+            hissFilter.frequency.value = 2000;
+            hissFilter.Q.value = 0.8;
+
+            // Low rumble oscillator — the rocket roar
+            const roar = ctx.createOscillator();
+            roar.type = 'sawtooth';
+            roar.frequency.value = 45;
+            const roarFilter = ctx.createBiquadFilter();
+            roarFilter.type = 'lowpass';
+            roarFilter.frequency.value = 200;
+            roarFilter.Q.value = 3;
+
+            // Mid crackle — distorted noise for fire texture
+            const crackleNoise = ctx.createBufferSource();
+            const crackleBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+            const cd = crackleBuf.getChannelData(0);
+            for (let i = 0; i < cd.length; i++) cd[i] = Math.random() * 2 - 1;
+            crackleNoise.buffer = crackleBuf;
+            crackleNoise.loop = true;
+            const crackleFilter = ctx.createBiquadFilter();
+            crackleFilter.type = 'bandpass';
+            crackleFilter.frequency.value = 600;
+            crackleFilter.Q.value = 2;
+            const crackleDist = ctx.createWaveShaper();
+            crackleDist.curve = this._distCurve;
+
+            // Master gain for the vent sound
+            const gain = ctx.createGain();
+            gain.gain.value = 0;
+
+            // Wire up
+            noise.connect(hissFilter);
+            hissFilter.connect(gain);
+            roar.connect(roarFilter);
+            roarFilter.connect(gain);
+            crackleNoise.connect(crackleDist);
+            crackleDist.connect(crackleFilter);
+            crackleFilter.connect(gain);
+            gain.connect(this.sfxGain);
+
+            noise.start();
+            roar.start();
+            crackleNoise.start();
+
+            this._ventSound = { noise, hissFilter, roar, roarFilter, crackleNoise, crackleFilter, crackleDist, gain };
+        }
+
+        const vs = this._ventSound;
+        const now = this.ctx.currentTime;
+        const h = Math.min(1, heatNorm);
+
+        // More heat = louder, deeper roar, brighter hiss
+        vs.hissFilter.frequency.setTargetAtTime(1500 + h * 3000, now, 0.04);
+        vs.roar.frequency.setTargetAtTime(35 + h * 30, now, 0.04);
+        vs.roarFilter.frequency.setTargetAtTime(150 + h * 200, now, 0.04);
+        vs.crackleFilter.frequency.setTargetAtTime(400 + h * 600, now, 0.04);
+
+        // Volume: louder when more heat is being vented
+        const vol = 0.08 + h * 0.2;
+        vs.gain.gain.setTargetAtTime(vol, now, 0.03);
     }
 }
 
@@ -2854,8 +3053,8 @@ const STATES = {
             game.renderer.compute(game.enemies.computePhysics);
             game.enemies.runNearbyCount(game.renderer);
             // Shooting
-            const shot = game.player.tryShoot();
-            if (shot === 'overheat') {
+            const shots = game.player.tryShoot();
+            if (shots === 'overheat') {
                 // Gun explodes — kill the player
                 game.deathCause = 'overheat';
                 game.player.health = 0;
@@ -2867,15 +3066,29 @@ const STATES = {
                 game.renderer.compute(game.particles.computeSpawn);
                 game.audio.play('explosion');
                 game.shakeTimer = 0.6;
-            } else if (shot) {
+            } else if (shots && shots.length) {
                 game.roundStats.shotsFired++;
-                game.particles.emit(shot.origin, shot.direction, CFG.particles.muzzleCount, 'muzzle');
+                // Muzzle + exhaust particles once per shot (not per pellet)
+                const firstShot = shots[0];
+                const pw = game.player.wpnParams.power / 255;
+                const sd = game.player.wpnParams.spread / 255;
+                const muzzleOvr = {
+                    color: [1.0, 0.9 - pw * 0.6, 0.3 - pw * 0.2],
+                    size: 0.06 + sd * 0.06,
+                };
+                game.particles.emit(firstShot.origin, firstShot.direction, CFG.particles.muzzleCount, 'muzzle', muzzleOvr);
                 game.renderer.compute(game.particles.computeSpawn);
-                // Launch exhaust burst — big plume behind the projectile
-                game.particles.emit(shot.origin, shot.direction, 40, 'exhaust');
+                const exhaustOvr = {
+                    color: [1.0, 0.8 - pw * 0.5, 0.3 - pw * 0.2],
+                    size: 0.08 + pw * 0.08,
+                };
+                game.particles.emit(firstShot.origin, firstShot.direction, 40, 'exhaust', exhaustOvr);
                 game.renderer.compute(game.particles.computeSpawn);
-                game.projectiles.fire(shot.origin, shot.direction, shot.speed, shot.damage);
-                game.audio.play('gunshot');
+                // Fire each pellet
+                for (const shot of shots) {
+                    game.projectiles.fire(shot.origin, shot.direction, shot.speed, shot.damage, game.player.wpnParams);
+                }
+                game.audio.play('gunshot', null, game.player.wpnParams);
             }
             // Venting: R key = vent heat as upward thrust
             if (game.player.keys['KeyR'] && game.player.heat > 0) {
@@ -2884,34 +3097,54 @@ const STATES = {
                 game.player.heat -= actualVent;
                 // Thrust proportional to heat vented
                 const thrust = actualVent * CFG.heat.thrustMult;
+                // Liftoff kick: if grounded, give a minimum upward velocity so we
+                // break free of the ground-snap zone (otherwise tiny per-frame thrust
+                // gets eaten by terrain collision each frame on uneven ground)
+                if (game.player.grounded) {
+                    game.player.velocity.y = Math.max(game.player.velocity.y, 3);
+                    game.player.position.y += 0.05; // nudge above ground
+                }
                 game.player.velocity.y += thrust;
                 game.player.grounded = false;
                 // Block shooting while venting
                 game.player.shooting = false;
             }
+            // Vent sound: hissing rocket roar while venting
+            const isVenting = game.player.keys['KeyR'] && game.player.heat > 0;
+            game.audio.updateVentSound(isVenting, game.player.heat / CFG.heat.maxHeat);
             // Heat whine audio
             game.audio.updateHeatWhine(game.player.heat);
+            // Rate buzz: gatling undertone at high fire rates
+            game.audio.updateRateBuzz(game.player.wpnParams, game.player.shooting);
             // --- Helper: trigger explosion at a point ---
             const triggerExplosion = (impactPos, damage) => {
                 game.pickupManager.recordHitPosition(impactPos);
                 const upDir = new THREE.Vector3(0, 1, 0);
-                game.particles.emit(impactPos, upDir, CFG.particles.explosionCount, 'explosion');
+                // Scale explosion visuals/physics with damage
+                const damageNorm = Math.min(1, damage / 100);
+                const radiusScale = CFG.projectile.explosionRadius * (0.4 + damageNorm * 0.8);
+                const forceScale = CFG.projectile.explosionForce * (0.3 + damageNorm * 0.7);
+                const expCount = Math.max(8, Math.round(CFG.particles.explosionCount * (0.3 + damageNorm * 0.7)));
+                const sparkCount = Math.max(4, Math.round(CFG.particles.explosionSparkCount * (0.3 + damageNorm * 0.7)));
+                // Explosion color shifts: orange (low) → bright red-white (high)
+                const expOvr = { color: [1.0, 0.5 - damageNorm * 0.2, 0.1 + damageNorm * 0.2] };
+                game.particles.emit(impactPos, upDir, expCount, 'explosion', expOvr);
                 game.renderer.compute(game.particles.computeSpawn);
-                game.particles.emit(impactPos, upDir, CFG.particles.explosionSparkCount, 'spark');
+                game.particles.emit(impactPos, upDir, sparkCount, 'spark');
                 game.renderer.compute(game.particles.computeSpawn);
                 game.enemies.explosionPosU.value.copy(impactPos);
-                game.enemies.explosionRadiusU.value = CFG.projectile.explosionRadius;
-                game.enemies.explosionForceU.value = CFG.projectile.explosionForce;
+                game.enemies.explosionRadiusU.value = radiusScale;
+                game.enemies.explosionForceU.value = forceScale;
                 game.enemies.explosionDamageU.value = damage;
                 game.renderer.compute(game.enemies.computeExplosion);
-                game.explosionSpheres.spawn(impactPos, CFG.projectile.explosionRadius);
+                game.explosionSpheres.spawn(impactPos, radiusScale, damageNorm);
                 game.audio.play('explosion', impactPos);
-                // Self-knockback (no damage)
+                // Self-knockback (no damage) — scales with explosion size
                 const toPlayer = game.player.position.clone().sub(impactPos);
                 const playerDist = toPlayer.length();
-                if (playerDist < CFG.projectile.explosionRadius * 1.5) {
-                    const falloff = 1 - Math.min(1, playerDist / (CFG.projectile.explosionRadius * 1.5));
-                    const knockForce = CFG.projectile.explosionForce * 0.6 * falloff;
+                if (playerDist < radiusScale * 1.5) {
+                    const falloff = 1 - Math.min(1, playerDist / (radiusScale * 1.5));
+                    const knockForce = forceScale * 0.6 * falloff;
                     if (playerDist > 0.5) toPlayer.normalize();
                     game.player.velocity.x += toPlayer.x * knockForce;
                     game.player.velocity.z += toPlayer.z * knockForce;
@@ -2996,6 +3229,8 @@ const STATES = {
             game.player.locked = false;
             game.player.shooting = false;
             game.audio.updateHeatWhine(0); // silence the whine
+            game.audio.updateRateBuzz(null, false); // silence the buzz
+            game.audio.updateVentSound(false, 0); // silence the vent
             const overlay = document.getElementById('gameover-overlay');
             overlay.style.display = 'flex';
             document.getElementById('hud').style.display = 'none';
@@ -3021,13 +3256,18 @@ const STATES = {
             // Stat line
             overlay.querySelector('.go-stat-line').innerHTML =
                 `\u23F1 <span>${timeStr}</span> &nbsp;\u2502&nbsp; \uD83C\uDFAF <span>${accuracy}</span> &nbsp;\u2502&nbsp; \uD83D\uDC80 <span>${kills.toLocaleString()}</span> &nbsp;\u2502&nbsp; \uD83D\uDD25 <span>${maxStreak.toLocaleString()}</span> streak`;
-            // Death cause
+            // Death cause + hint
             const deathMessages = {
                 overheat: 'Your gun overheated and exploded.',
                 enemies: 'Overwhelmed by the horde.',
             };
+            const deathHints = {
+                overheat: 'Press R to vent your excess heat.',
+            };
             const causeEl = overlay.querySelector('.go-death-cause');
-            causeEl.textContent = deathMessages[game.deathCause] || deathMessages.enemies;
+            const msg = deathMessages[game.deathCause] || deathMessages.enemies;
+            const hint = deathHints[game.deathCause] || '';
+            causeEl.innerHTML = msg + (hint ? '<br><span style="color:#8af;font-size:12px;opacity:0.8">' + hint + '</span>' : '');
             // Gun loadout hex
             const wp = game.player.wpnParams;
             const hex = (v) => v.toString(16).padStart(2, '0').toUpperCase();
