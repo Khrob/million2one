@@ -353,7 +353,8 @@ const CFG = {
     terrain: { seed: 1135, octaves: 6, frequency: 0.003, amplitude: 50, lacunarity: 2.1, persistence: 0.48, offset: 25, resolution: 2048 },
     player: { walkSpeed: 8, sprintMult: 1.8, jumpForce: 12, gravity: 28, height: 3.6, slopeEffect: 0.7, maxHealth: 100 },
     enemies: { speed: 1.75, health: 33, damage: 8, attackRange: 3, attackRate: 1.0, size: 1.2, cullDistance: 1500, flowInfluence: 0.3 },
-    weapon: { damage: 200, fireRate: 5, range: 500, maxAmmo: 30, spread: 0.015, hitRadius: 1.8 },
+    weapon: { damage: 200, fireRate: 5, range: 500, maxAmmo: 30, spread: 0.015, hitRadius: 1.8, convergeDist: 60 },
+    handedness: 'left',  // 'left' = gun on left side (southpaw), 'right' = gun on right side
     pickups: { healthCount: 12, ammoCount: 15, healthAmount: 30, ammoAmount: 10, bobSpeed: 2, bobHeight: 0.3, respawnTime: 15 },
     lighting: { sunIntensity: 1.8, sunX: 0.5, sunY: 1.0, sunZ: 0.3, ambientIntensity: 0.45, fogNear: 400, fogFar: 1200, fogColor: '#a0b8d0' },
     world: { size: 10000 },
@@ -1511,6 +1512,14 @@ class Player {
         this.muzzleFlash.position.set(0.2, -0.14, -0.65);
         this.weaponGroup.add(this.muzzleFlash);
         this.camera.add(this.weaponGroup);
+        this.applyHandedness();
+    }
+
+    applyHandedness() {
+        // Flip gun to the correct side: left-handed = gun on left (negative X), right-handed = gun on right (positive X)
+        const side = CFG.handedness === 'left' ? -1 : 1;
+        this.weaponGroup.scale.x = side;
+        this.handSide = side;
     }
 
     update(dt) {
@@ -1580,11 +1589,24 @@ class Player {
         this.muzzleFlash.material.opacity = 1;
         this.pitch += 0.01;
         this.weaponGroup.position.z = 0.04;
-        const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
-        dir.x += (Math.random() - 0.5) * CFG.weapon.spread;
-        dir.y += (Math.random() - 0.5) * CFG.weapon.spread;
-        dir.normalize();
-        return { origin: this.camera.position.clone(), direction: dir };
+
+        // Camera-center aim direction (where crosshair points)
+        const aimDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+        aimDir.x += (Math.random() - 0.5) * CFG.weapon.spread;
+        aimDir.y += (Math.random() - 0.5) * CFG.weapon.spread;
+        aimDir.normalize();
+
+        // Barrel offset in camera-local space (matches the viewmodel gun position)
+        const side = this.handSide || (CFG.handedness === 'left' ? -1 : 1);
+        const barrelOffset = new THREE.Vector3(0.2 * side, -0.14, -0.65);
+        // Transform to world space
+        const barrelWorldPos = barrelOffset.applyQuaternion(this.camera.quaternion).add(this.camera.position);
+
+        // Convergence: aim barrel shot towards where the crosshair hits at convergeDist
+        const convergePoint = this.camera.position.clone().addScaledVector(aimDir, CFG.weapon.convergeDist);
+        const barrelDir = convergePoint.sub(barrelWorldPos).normalize();
+
+        return { origin: barrelWorldPos, direction: barrelDir };
     }
 
     reload() { this.ammo = CFG.weapon.maxAmmo; }
@@ -2316,10 +2338,9 @@ const STATES = {
             const shot = game.player.tryShoot();
             if (shot) {
                 game.roundStats.shotsFired++;
-                const muzzlePos = shot.origin.clone().add(shot.direction.clone().multiplyScalar(1.5));
-                game.particles.emit(muzzlePos, shot.direction, CFG.particles.muzzleCount, 'muzzle');
+                game.particles.emit(shot.origin, shot.direction, CFG.particles.muzzleCount, 'muzzle');
                 game.renderer.compute(game.particles.computeSpawn);
-                game.projectiles.fire(muzzlePos, shot.direction);
+                game.projectiles.fire(shot.origin, shot.direction);
                 game.audio.play('gunshot');
             }
             // --- Helper: trigger explosion at a point ---
@@ -2724,6 +2745,23 @@ class Game {
         addSlider('Master Volume', 'audio.masterVolume', 0, 1, 0.05);
         addSlider('SFX Volume', 'audio.sfxVolume', 0, 1, 0.05);
         addSlider('Music Volume', 'audio.musicVolume', 0, 1, 0.05);
+        // Handedness toggle
+        const handRow = document.createElement('div');
+        handRow.className = 'debug-row';
+        const handLabel = document.createElement('label');
+        handLabel.textContent = 'Handedness';
+        handRow.appendChild(handLabel);
+        const handBtn = document.createElement('button');
+        handBtn.className = 'menu-btn';
+        handBtn.style.cssText = 'display:inline-block;width:auto;padding:6px 18px;font-size:13px;margin:0';
+        handBtn.textContent = CFG.handedness === 'left' ? '◀ LEFT' : 'RIGHT ▶';
+        handBtn.onclick = () => {
+            CFG.handedness = CFG.handedness === 'left' ? 'right' : 'left';
+            handBtn.textContent = CFG.handedness === 'left' ? '◀ LEFT' : 'RIGHT ▶';
+            if (game && game.player) game.player.applyHandedness();
+        };
+        handRow.appendChild(handBtn);
+        settingsPanel.appendChild(handRow);
         const settingsBack = document.createElement('button');
         settingsBack.className = 'menu-btn back-btn';
         settingsBack.textContent = 'BACK';
