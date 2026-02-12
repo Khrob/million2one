@@ -353,7 +353,7 @@ const CFG = {
     terrain: { seed: 1135, octaves: 6, frequency: 0.003, amplitude: 50, lacunarity: 2.1, persistence: 0.48, offset: 25, resolution: 2048 },
     player: { walkSpeed: 8, sprintMult: 1.8, jumpForce: 12, gravity: 28, height: 3.6, slopeEffect: 0.7, maxHealth: 100 },
     enemies: { speed: 1.75, health: 33, damage: 8, attackRange: 3, attackRate: 1.0, size: 1.2, cullDistance: 1500, flowInfluence: 0.3 },
-    weapon: { damage: 200, fireRate: 5, range: 500, maxAmmo: 30, spread: 0.015, hitRadius: 1.8, convergeDist: 60 },
+    weapon: { damage: 200, fireRate: 5, range: 500, maxAmmo: 30, spread: 0.015, hitRadius: 1.8, convergeDist: 60, barrelX: 0.2, barrelY: -0.14, barrelZ: -0.65 },
     handedness: 'left',  // 'left' = gun on left side (southpaw), 'right' = gun on right side
     pickups: { healthCount: 12, ammoCount: 15, healthAmount: 30, ammoAmount: 10, bobSpeed: 2, bobHeight: 0.3, respawnTime: 15 },
     lighting: { sunIntensity: 1.8, sunX: 0.5, sunY: 1.0, sunZ: 0.3, ambientIntensity: 0.45, fogNear: 400, fogFar: 1200, fogColor: '#a0b8d0' },
@@ -373,6 +373,46 @@ if (TERRAIN_CONFIG) {
         if (tc.world) Object.assign(CFG.world, tc.world);
     } catch(e) { console.warn('Bad TERRAIN_CONFIG:', e); }
 }
+
+// --- Config sharing: encode/decode full CFG as base64 URL param ---
+function encodeCFG() {
+    // Snapshot all tunable config (exclude non-tunable like poolSize, resolution)
+    const snap = {};
+    for (const cat in CFG) {
+        if (typeof CFG[cat] === 'object') {
+            snap[cat] = Object.assign({}, CFG[cat]);
+        } else {
+            snap[cat] = CFG[cat];
+        }
+    }
+    return btoa(JSON.stringify(snap));
+}
+function applyCFG(b64) {
+    try {
+        const incoming = JSON.parse(atob(b64));
+        for (const cat in incoming) {
+            if (typeof incoming[cat] === 'object' && typeof CFG[cat] === 'object') {
+                Object.assign(CFG[cat], incoming[cat]);
+            } else if (cat in CFG) {
+                CFG[cat] = incoming[cat];
+            }
+        }
+        return true;
+    } catch(e) { console.warn('Bad config string:', e); return false; }
+}
+function getShareURL() {
+    const url = new URL(window.location.href);
+    url.searchParams.set('cfg', encodeCFG());
+    return url.toString();
+}
+// Apply URL config on load (overrides TERRAIN_CONFIG + defaults)
+(function() {
+    const params = new URLSearchParams(window.location.search);
+    const cfgParam = params.get('cfg');
+    if (cfgParam) {
+        if (applyCFG(cfgParam)) console.log('Config loaded from URL');
+    }
+})();
 
 // ============================================================
 //  TERRAIN (CPU mesh + GPU height texture)
@@ -1502,14 +1542,11 @@ class Player {
 
     buildWeaponModel() {
         this.weaponGroup = new THREE.Group();
-        const body = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.1, 0.35), new THREE.MeshLambertMaterial({ color: 0x333333 }));
-        body.position.set(0.2, -0.18, -0.35);
-        this.weaponGroup.add(body);
-        const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.04, 0.2), new THREE.MeshLambertMaterial({ color: 0x222222 }));
-        barrel.position.set(0.2, -0.14, -0.52);
-        this.weaponGroup.add(barrel);
+        this.gunBody = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.1, 0.35), new THREE.MeshLambertMaterial({ color: 0x333333 }));
+        this.weaponGroup.add(this.gunBody);
+        this.gunBarrel = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.04, 0.2), new THREE.MeshLambertMaterial({ color: 0x222222 }));
+        this.weaponGroup.add(this.gunBarrel);
         this.muzzleFlash = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 6), new THREE.MeshBasicMaterial({ color: 0xffff44, transparent: true, opacity: 0 }));
-        this.muzzleFlash.position.set(0.2, -0.14, -0.65);
         this.weaponGroup.add(this.muzzleFlash);
         this.camera.add(this.weaponGroup);
         this.applyHandedness();
@@ -1520,6 +1557,14 @@ class Player {
         const side = CFG.handedness === 'left' ? -1 : 1;
         this.weaponGroup.scale.x = side;
         this.handSide = side;
+        this.syncWeaponPositions();
+    }
+
+    syncWeaponPositions() {
+        const bx = CFG.weapon.barrelX, by = CFG.weapon.barrelY, bz = CFG.weapon.barrelZ;
+        this.gunBody.position.set(bx, by - 0.04, bz + 0.30);
+        this.gunBarrel.position.set(bx, by, bz + 0.13);
+        this.muzzleFlash.position.set(bx, by, bz);
     }
 
     update(dt) {
@@ -1598,7 +1643,7 @@ class Player {
 
         // Barrel offset in camera-local space (matches the viewmodel gun position)
         const side = this.handSide || (CFG.handedness === 'left' ? -1 : 1);
-        const barrelOffset = new THREE.Vector3(0.2 * side, -0.14, -0.65);
+        const barrelOffset = new THREE.Vector3(CFG.weapon.barrelX * side, CFG.weapon.barrelY, CFG.weapon.barrelZ);
         // Transform to world space
         const barrelWorldPos = barrelOffset.applyQuaternion(this.camera.quaternion).add(this.camera.position);
 
@@ -2045,13 +2090,18 @@ class DebugOverlay {
             { key: 'enemies.cullDistance', label: 'Cull Dist', min: 50, max: 5000, step: 50 },
             { key: 'enemies.flowInfluence', label: 'Flow Influence', min: 0, max: 1, step: 0.05 },
         ]);
+        const syncGun = () => { if (this.game.player) this.game.player.syncWeaponPositions(); };
         this.addSection('Weapon', [
             { key: 'weapon.damage', label: 'Damage', min: 1, max: 200, step: 1 },
             { key: 'weapon.fireRate', label: 'Fire Rate', min: 1, max: 20, step: 0.5 },
             { key: 'weapon.range', label: 'Range', min: 50, max: 1000, step: 10 },
             { key: 'weapon.maxAmmo', label: 'Max Ammo', min: 5, max: 200, step: 5 },
             { key: 'weapon.hitRadius', label: 'Hit Radius', min: 0.5, max: 5, step: 0.1 },
-        ]);
+            { key: 'weapon.convergeDist', label: 'Converge Dist', min: 10, max: 200, step: 5 },
+            { key: 'weapon.barrelX', label: 'Barrel X', min: 0.05, max: 0.5, step: 0.01 },
+            { key: 'weapon.barrelY', label: 'Barrel Y', min: -0.4, max: 0.1, step: 0.01 },
+            { key: 'weapon.barrelZ', label: 'Barrel Z', min: -1.0, max: -0.2, step: 0.01 },
+        ], syncGun);
         this.addSection('Particles', [
             { key: 'particles.muzzleCount', label: 'Muzzle #', min: 0, max: 50, step: 1 },
             { key: 'particles.trailCount', label: 'Trail #', min: 0, max: 200, step: 1 },
@@ -2096,6 +2146,47 @@ class DebugOverlay {
         mkBtn('Full Heal + Ammo', () => { this.game.player.health = CFG.player.maxHealth; this.game.player.ammo = CFG.weapon.maxAmmo; });
         mkBtn('Teleport Center', () => { const g = this.game; g.player.position.set(0, g.terrain.getHeight(0,0)+CFG.player.height, 0); });
         this.el.appendChild(btns);
+
+        // Config sharing row
+        const shareRow = document.createElement('div'); shareRow.style.padding = '8px 16px';
+        const shareBtn = document.createElement('button'); shareBtn.className = 'debug-btn';
+        shareBtn.textContent = '📋 COPY CONFIG URL';
+        shareBtn.style.cssText = 'width:100%;padding:8px;font-size:12px;background:rgba(136,170,255,0.15);border:1px solid rgba(136,170,255,0.3)';
+        shareBtn.onclick = () => {
+            const url = getShareURL();
+            navigator.clipboard.writeText(url).then(() => {
+                shareBtn.textContent = '✓ COPIED!';
+                setTimeout(() => { shareBtn.textContent = '📋 COPY CONFIG URL'; }, 2000);
+            });
+        };
+        shareRow.appendChild(shareBtn);
+        // Paste config input
+        const pasteRow = document.createElement('div'); pasteRow.style.cssText = 'display:flex;gap:4px;margin-top:6px';
+        const pasteInput = document.createElement('input'); pasteInput.type = 'text';
+        pasteInput.placeholder = 'Paste config URL or base64...';
+        pasteInput.style.cssText = 'flex:1;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.15);color:#fff;font-size:11px;padding:4px 8px;border-radius:3px;font-family:monospace';
+        const applyBtn = document.createElement('button'); applyBtn.className = 'debug-btn';
+        applyBtn.textContent = 'APPLY';
+        applyBtn.style.cssText = 'padding:4px 10px;font-size:11px';
+        applyBtn.onclick = () => {
+            let val = pasteInput.value.trim();
+            // Extract cfg param from URL if pasted as full URL
+            try { const u = new URL(val); val = u.searchParams.get('cfg') || val; } catch(e) {}
+            if (applyCFG(val)) {
+                applyBtn.textContent = '✓ APPLIED';
+                this.build();  // Rebuild debug panel with new values
+                if (this.game.player) this.game.player.syncWeaponPositions();
+                if (this.game.player) this.game.player.applyHandedness();
+                if (this.game.audio) this.game.audio.syncVolumes();
+                setTimeout(() => { applyBtn.textContent = 'APPLY'; }, 2000);
+            } else {
+                applyBtn.textContent = '✗ INVALID';
+                setTimeout(() => { applyBtn.textContent = 'APPLY'; }, 2000);
+            }
+        };
+        pasteRow.appendChild(pasteInput); pasteRow.appendChild(applyBtn);
+        shareRow.appendChild(pasteRow);
+        this.el.appendChild(shareRow);
     }
     addSection(title, params, onCommit) {
         const section = document.createElement('div'); section.className = 'debug-section';
