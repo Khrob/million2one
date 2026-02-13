@@ -135,6 +135,16 @@ canvas { display: block; }
 .load-bar-outer { width: 240px; height: 2px; background: rgba(255,255,255,0.06); border-radius: 1px; overflow: hidden; margin-bottom: 14px; }
 .load-bar-inner { height: 100%; width: 0%; background: #8af; border-radius: 1px; transition: width 0.4s ease-out; box-shadow: 0 0 6px rgba(136,170,255,0.3); }
 .load-status { color: #444; font-size: 11px; letter-spacing: 1px; }
+/* Capability check result on loading screen */
+#capability-result { display: none; text-align: center; margin-top: 18px; max-width: 400px; }
+.cap-gpu-name { color: #555; font-size: 10px; letter-spacing: 1px; margin-bottom: 6px; }
+.cap-verdict { font-size: 13px; letter-spacing: 1px; margin-bottom: 8px; }
+.cap-verdict.good { color: #4e4; }
+.cap-verdict.caution { color: #fa4; }
+.cap-verdict.unsupported { color: #f44; }
+.cap-message { color: #666; font-size: 11px; line-height: 1.6; margin-bottom: 10px; }
+.cap-continue-btn { padding: 8px 24px; background: rgba(255,170,68,0.12); color: #fa4; border: 1px solid rgba(255,170,68,0.3); border-radius: 4px; cursor: pointer; font-family: 'Share Tech Mono', monospace; font-size: 11px; letter-spacing: 1px; transition: all 0.15s; }
+.cap-continue-btn:hover { background: rgba(255,170,68,0.25); color: #fff; }
 /* === Version label === */
 .version-label { color: rgba(136,170,255,0.3); font-size: 11px; letter-spacing: 3px; text-transform: uppercase; margin-top: -40px; margin-bottom: 50px; }
 /* === Support === */
@@ -169,6 +179,12 @@ canvas { display: block; }
     <div class="load-version" id="load-version"></div>
     <div class="load-bar-outer"><div class="load-bar-inner" id="load-progress"></div></div>
     <div class="load-status" id="load-status-text">Initializing...</div>
+    <div id="capability-result">
+        <div class="cap-gpu-name" id="cap-gpu-name"></div>
+        <div class="cap-verdict" id="cap-verdict"></div>
+        <div class="cap-message" id="cap-message"></div>
+        <button class="cap-continue-btn" id="cap-continue-btn" style="display:none">CONTINUE ANYWAY</button>
+    </div>
 </div>
 <div id="blocker" style="display:none">
     <h1>PAUSED</h1>
@@ -2640,6 +2656,177 @@ class AudioEngine {
 }
 
 // ============================================================
+//  PERFORMANCE PROFILER (frame time breakdown)
+// ============================================================
+class PerformanceProfiler {
+    constructor() {
+        this.HISTORY = 200;
+        this.CHANNELS = ['enemyCompute', 'particleCompute', 'projCollision', 'renderTime', 'jsTime'];
+        this.data = new Float32Array(this.CHANNELS.length * this.HISTORY);
+        this.totals = new Float32Array(this.HISTORY); // total frame time
+        this.idx = 0;
+        this.frameStart = 0;
+        this._marks = {};
+        this._markStarts = {};
+    }
+    beginFrame() {
+        this.frameStart = performance.now();
+        this._marks = {};
+        this._markStarts = {};
+    }
+    mark(name) {
+        this._markStarts[name] = performance.now();
+    }
+    markEnd(name) {
+        if (this._markStarts[name] !== undefined) {
+            const elapsed = performance.now() - this._markStarts[name];
+            this._marks[name] = (this._marks[name] || 0) + elapsed; // accumulate if called multiple times
+        }
+    }
+    endFrame() {
+        const totalMs = performance.now() - this.frameStart;
+        const i = this.idx % this.HISTORY;
+
+        // Store each channel
+        let knownTime = 0;
+        for (let c = 0; c < this.CHANNELS.length; c++) {
+            const name = this.CHANNELS[c];
+            const ms = this._marks[name] || 0;
+            this.data[c * this.HISTORY + i] = ms;
+            if (name !== 'jsTime') knownTime += ms;
+        }
+        // JS time = total - all measured GPU/render time
+        const jsIdx = this.CHANNELS.indexOf('jsTime');
+        this.data[jsIdx * this.HISTORY + i] = Math.max(0, totalMs - knownTime);
+        this.totals[i] = totalMs;
+
+        this.idx++;
+    }
+    getFrame(offset) {
+        // offset: 0 = most recent, 1 = previous, etc.
+        const i = ((this.idx - 1 - offset) % this.HISTORY + this.HISTORY) % this.HISTORY;
+        const frame = {};
+        for (let c = 0; c < this.CHANNELS.length; c++) {
+            frame[this.CHANNELS[c]] = this.data[c * this.HISTORY + i];
+        }
+        frame.total = this.totals[i];
+        return frame;
+    }
+    getChannelSlice(channelIdx) {
+        // Returns a view of last HISTORY values for this channel, oldest first
+        const out = new Float32Array(this.HISTORY);
+        for (let j = 0; j < this.HISTORY; j++) {
+            const i = ((this.idx - this.HISTORY + j) % this.HISTORY + this.HISTORY) % this.HISTORY;
+            out[j] = this.data[channelIdx * this.HISTORY + i];
+        }
+        return out;
+    }
+}
+
+// ============================================================
+//  PERFORMANCE GRAPH OVERLAY (canvas stacked bar chart)
+// ============================================================
+class PerformanceGraphOverlay {
+    constructor(game) {
+        this.game = game;
+        this.visible = false;
+        this.W = 400;
+        this.H = 120;
+
+        // Create canvas
+        this.canvas = document.createElement('canvas');
+        this.canvas.width = this.W;
+        this.canvas.height = this.H;
+        this.canvas.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:999;pointer-events:none;display:none;border-radius:4px;';
+        document.body.appendChild(this.canvas);
+        this.ctx = this.canvas.getContext('2d');
+
+        this.colors = ['#5599ff', '#44ddaa', '#ff8844', '#cc66ff', '#666'];
+        this.labels = ['Enemy', 'Particle', 'ProjCol', 'Render', 'JS/CPU'];
+        this.maxMs = 33.3; // Y-axis scale (30fps)
+
+        // Toggle with backslash
+        document.addEventListener('keydown', e => {
+            if (e.code === 'Backslash') {
+                e.preventDefault();
+                this.visible = !this.visible;
+                this.canvas.style.display = this.visible ? 'block' : 'none';
+            }
+        });
+    }
+
+    draw() {
+        if (!this.visible) return;
+        const prof = this.game.profiler;
+        if (!prof || prof.idx < 2) return;
+
+        const ctx = this.ctx;
+        const W = this.W, H = this.H;
+        const channels = prof.CHANNELS.length;
+        const barW = W / prof.HISTORY;
+
+        // Clear
+        ctx.clearRect(0, 0, W, H);
+        ctx.fillStyle = 'rgba(0,0,0,0.75)';
+        ctx.fillRect(0, 0, W, H);
+
+        // Draw reference lines
+        const y60 = H - (16.67 / this.maxMs) * H;
+        const y30 = H - (33.33 / this.maxMs) * H;
+        ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(0, y60); ctx.lineTo(W, y60);
+        ctx.moveTo(0, y30); ctx.lineTo(W, y30);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Labels for reference lines
+        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        ctx.font = '8px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText('60fps', W - 2, y60 - 2);
+        ctx.fillText('30fps', W - 2, Math.max(y30 - 2, 8));
+
+        // Draw stacked bars
+        for (let j = 0; j < prof.HISTORY; j++) {
+            const fi = ((prof.idx - prof.HISTORY + j) % prof.HISTORY + prof.HISTORY) % prof.HISTORY;
+            const x = j * barW;
+            let yBottom = H;
+
+            for (let c = 0; c < channels; c++) {
+                const ms = prof.data[c * prof.HISTORY + fi];
+                const barH = (ms / this.maxMs) * H;
+                if (barH < 0.3) continue;
+                yBottom -= barH;
+                ctx.fillStyle = this.colors[c];
+                ctx.fillRect(x, yBottom, Math.max(barW - 0.5, 1), barH);
+            }
+        }
+
+        // Current frame stats (top-right of graph)
+        const latest = prof.getFrame(0);
+        ctx.fillStyle = '#fff';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'right';
+        const fps = latest.total > 0 ? Math.round(1000 / latest.total) : 0;
+        ctx.fillText(`${fps} fps  ${latest.total.toFixed(1)}ms`, W - 4, 12);
+
+        // Legend (bottom)
+        ctx.font = '8px monospace';
+        ctx.textAlign = 'left';
+        let lx = 4;
+        for (let c = 0; c < channels; c++) {
+            ctx.fillStyle = this.colors[c];
+            ctx.fillRect(lx, H - 10, 6, 6);
+            ctx.fillStyle = 'rgba(255,255,255,0.6)';
+            ctx.fillText(this.labels[c], lx + 8, H - 4);
+            lx += ctx.measureText(this.labels[c]).width + 16;
+        }
+    }
+}
+
+// ============================================================
 //  DEBUG OVERLAY
 // ============================================================
 class DebugOverlay {
@@ -2876,11 +3063,15 @@ const STATES = {
             const lookZ = Math.cos(game.attractTime * 0.2) * 200;
             game.attractCamera.lookAt(lookX, 50, lookZ);
             // Keep enemies + particles alive in attract
+            game.profiler.mark('enemyCompute');
             game.enemies.syncUniforms(dt, game.player.position, game.attractCamera.position);
             game.renderer.compute(game.enemies.computeUpdate);
             game.renderer.compute(game.enemies.computePhysics);
+            game.profiler.markEnd('enemyCompute');
+            game.profiler.mark('particleCompute');
             game.particles.dtU.value = dt;
             game.renderer.compute(game.particles.computeUpdate);
+            game.profiler.markEnd('particleCompute');
             // Live-sync lighting from debug sliders
             game.sunLight.intensity = CFG.lighting.sunIntensity;
             game.sunLight.position.set(CFG.lighting.sunX, CFG.lighting.sunY, CFG.lighting.sunZ).normalize().multiplyScalar(400);
@@ -2993,13 +3184,17 @@ const STATES = {
             game.camera.position.copy(game.player.position);
             game.camera.rotation.set(game.player.pitch, game.player.yaw, 0);
             // Update enemies (they're moving below)
+            game.profiler.mark('enemyCompute');
             game.enemies.syncUniforms(dt, game.player.position, game.camera.position);
             game.enemies.updateDensity(dt, game.renderer);
             game.renderer.compute(game.enemies.computeUpdate);
             game.renderer.compute(game.enemies.computePhysics);
+            game.profiler.markEnd('enemyCompute');
             // Update particles + explosion spheres
+            game.profiler.mark('particleCompute');
             game.particles.dtU.value = dt;
             game.renderer.compute(game.particles.computeUpdate);
+            game.profiler.markEnd('particleCompute');
             game.explosionSpheres.update(dt);
             // Landing check
             if (game.player.position.y <= groundY) {
@@ -3047,11 +3242,13 @@ const STATES = {
                 game.camera.rotation.y += (Math.random() - 0.5) * 0.02 * intensity;
             }
             // GPU enemies
+            game.profiler.mark('enemyCompute');
             game.enemies.syncUniforms(dt, game.player.position, game.camera.position);
             game.enemies.updateDensity(dt, game.renderer);
             game.renderer.compute(game.enemies.computeUpdate);
             game.renderer.compute(game.enemies.computePhysics);
             game.enemies.runNearbyCount(game.renderer);
+            game.profiler.markEnd('enemyCompute');
             // Shooting
             const shots = game.player.tryShoot();
             if (shots === 'overheat') {
@@ -3170,11 +3367,15 @@ const STATES = {
                 triggerExplosion(impact.pos, impact.damage);
             }
             // Upload projectile positions + run GPU collision (readback happens after render in animate)
+            game.profiler.mark('projCollision');
             game.enemies.uploadProjectilePositions(game.projectiles.pool);
             game.enemies.runProjectileCollision(game.renderer);
+            game.profiler.markEnd('projCollision');
             // Particles
+            game.profiler.mark('particleCompute');
             game.particles.dtU.value = dt;
             game.renderer.compute(game.particles.computeUpdate);
+            game.profiler.markEnd('particleCompute');
             // Explosion spheres
             game.explosionSpheres.update(dt);
             // Pickups
@@ -3403,6 +3604,10 @@ class Game {
         this.buildMenuOverlay();
         this.buildPregameOverlay();
         this.buildGameOverOverlay();
+
+        // Performance profiler + graph
+        this.profiler = new PerformanceProfiler();
+        this.perfGraph = new PerformanceGraphOverlay(this);
 
         // Debug
         this.debug = new DebugOverlay(this);
@@ -3916,6 +4121,7 @@ class Game {
     }
 
     animate() {
+        this.profiler.beginFrame();
         const dt = Math.min(this.clock.getDelta(), 0.05);
 
         // FPS counter
@@ -4019,7 +4225,9 @@ class Game {
         if (this.skyMesh) this.skyMesh.position.copy(this._activeCamera.position);
 
         // Render with active camera
+        this.profiler.mark('renderTime');
         this.renderer.render(this.scene, this._activeCamera);
+        this.profiler.markEnd('renderTime');
 
         // Projectile collision readback (AFTER render to ensure GPU commands are flushed)
         if (this.state === 'playing') {
@@ -4027,6 +4235,9 @@ class Game {
             this.enemies.checkNearbyCount(this.renderer);
             this.enemies.runKillCountReadback(this.renderer);
         }
+
+        this.profiler.endFrame();
+        this.perfGraph.draw();
     }
 }
 
@@ -4340,6 +4551,227 @@ async function initTerrainEditor() {
 }
 
 // ============================================================
+//  SYSTEM CAPABILITY CHECK
+// ============================================================
+async function checkSystemCapabilities() {
+    const result = {
+        webgpu: false,
+        adapterName: 'Unknown GPU',
+        verdict: 'unsupported',
+        benchmarkMs: -1,
+        estimatedMaxEnemies: 0,
+        message: 'WebGPU is not available in this browser.',
+        memoryHint: 0,
+    };
+
+    // 1. Check WebGPU availability
+    if (!navigator.gpu) {
+        return result;
+    }
+
+    // 2. Request adapter
+    let adapter;
+    try {
+        adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+    } catch (e) {
+        result.message = 'Failed to get GPU adapter: ' + e.message;
+        return result;
+    }
+    if (!adapter) {
+        result.message = 'No suitable GPU adapter found.';
+        return result;
+    }
+
+    // 3. Inspect adapter info + limits
+    try {
+        const info = adapter.info || {};
+        const vendor = info.vendor || '';
+        const arch = info.architecture || '';
+        const desc = info.description || info.device || '';
+        result.adapterName = [vendor, arch, desc].filter(Boolean).join(' ') || 'GPU detected';
+    } catch (e) {
+        result.adapterName = 'GPU detected';
+    }
+
+    const limits = adapter.limits;
+    const maxStorageBuf = limits.maxStorageBufferBindingSize || 0;
+    const maxBufSize = limits.maxBufferSize || 0;
+    // Our enemy system needs: 1M enemies × 48 bytes = ~48MB storage buffer
+    const neededStorageBytes = ENEMY_COUNT * 48;
+    if (maxStorageBuf < neededStorageBytes) {
+        result.webgpu = true;
+        result.verdict = 'caution';
+        result.message = `GPU storage buffer limit (${(maxStorageBuf / 1048576).toFixed(0)}MB) is tight for ${(ENEMY_COUNT/1e6).toFixed(1)}M enemies (need ~${(neededStorageBytes / 1048576).toFixed(0)}MB). May need to reduce enemy count.`;
+    }
+
+    // 4. Request a test device with our required limits
+    let testDevice;
+    try {
+        testDevice = await adapter.requestDevice({
+            requiredLimits: {
+                maxStorageBufferBindingSize: Math.min(neededStorageBytes + 16777216, maxStorageBuf),
+                maxBufferSize: Math.min(neededStorageBytes + 16777216, maxBufSize),
+                maxComputeWorkgroupsPerDimension: Math.min(65535, limits.maxComputeWorkgroupsPerDimension || 65535),
+            }
+        });
+    } catch (e) {
+        result.webgpu = true;
+        result.verdict = 'caution';
+        result.message = 'Could not allocate GPU device with required limits. Performance may be limited.';
+        return result;
+    }
+
+    result.webgpu = true;
+
+    // 5. Mini compute benchmark — write 65536 values, measure throughput
+    let benchMs = 999;
+    try {
+        const N = 65536;
+        const bufferSize = N * 4;
+        const storageBuffer = testDevice.createBuffer({
+            size: bufferSize,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+        });
+        const readBuffer = testDevice.createBuffer({
+            size: bufferSize,
+            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+        });
+        const shaderModule = testDevice.createShaderModule({
+            code: `
+                @group(0) @binding(0) var<storage, read_write> data: array<f32>;
+                @compute @workgroup_size(64)
+                fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+                    let i = gid.x;
+                    if (i < ${N}u) {
+                        // Do some math to actually exercise the GPU
+                        var v = f32(i) * 0.001;
+                        for (var j = 0u; j < 100u; j = j + 1u) {
+                            v = sin(v) * cos(v * 0.7) + 0.5;
+                        }
+                        data[i] = v;
+                    }
+                }
+            `
+        });
+        const pipeline = testDevice.createComputePipeline({
+            layout: 'auto',
+            compute: { module: shaderModule, entryPoint: 'main' }
+        });
+        const bindGroup = testDevice.createBindGroup({
+            layout: pipeline.getBindGroupLayout(0),
+            entries: [{ binding: 0, resource: { buffer: storageBuffer } }]
+        });
+
+        // Warm-up dispatch
+        const warmCmd = testDevice.createCommandEncoder();
+        const warmPass = warmCmd.beginComputePass();
+        warmPass.setPipeline(pipeline);
+        warmPass.setBindGroup(0, bindGroup);
+        warmPass.dispatchWorkgroups(Math.ceil(N / 64));
+        warmPass.end();
+        warmCmd.copyBufferToBuffer(storageBuffer, 0, readBuffer, 0, bufferSize);
+        testDevice.queue.submit([warmCmd.finish()]);
+        await readBuffer.mapAsync(GPUMapMode.READ);
+        readBuffer.unmap();
+
+        // Timed run: 3 dispatches
+        const t0 = performance.now();
+        for (let run = 0; run < 3; run++) {
+            const enc = testDevice.createCommandEncoder();
+            const pass = enc.beginComputePass();
+            pass.setPipeline(pipeline);
+            pass.setBindGroup(0, bindGroup);
+            pass.dispatchWorkgroups(Math.ceil(N / 64));
+            pass.end();
+            enc.copyBufferToBuffer(storageBuffer, 0, readBuffer, 0, bufferSize);
+            testDevice.queue.submit([enc.finish()]);
+            await readBuffer.mapAsync(GPUMapMode.READ);
+            readBuffer.unmap();
+        }
+        benchMs = (performance.now() - t0) / 3;
+
+        storageBuffer.destroy();
+        readBuffer.destroy();
+    } catch (e) {
+        console.warn('Benchmark failed:', e);
+        benchMs = 999;
+    }
+
+    // 6. Destroy test device
+    testDevice.destroy();
+
+    // 7. Memory hint
+    result.memoryHint = navigator.deviceMemory || 0;
+    result.benchmarkMs = benchMs;
+
+    // 8. Extrapolate: our benchmark does 65k elements × 100 iterations each.
+    // The real game does 1M enemies with ~15 compute passes of varying complexity.
+    // Rough estimate: if 65k×100iter takes Xms, then 1M×15 passes ≈ X × (1M/65k) × (15/100) ≈ X × 2.3
+    const estimatedFrameGpuMs = benchMs * (ENEMY_COUNT / 65536) * (15 / 100);
+    result.estimatedMaxEnemies = Math.round(ENEMY_COUNT * (16.6 / Math.max(0.1, estimatedFrameGpuMs)));
+
+    // 9. Verdict
+    if (benchMs >= 999) {
+        result.verdict = 'caution';
+        result.message = 'GPU benchmark could not complete. Performance is uncertain.';
+    } else if (estimatedFrameGpuMs < 10) {
+        result.verdict = 'good';
+        result.message = `Estimated GPU frame time: ${estimatedFrameGpuMs.toFixed(1)}ms — your system looks great!`;
+    } else if (estimatedFrameGpuMs < 25) {
+        result.verdict = 'caution';
+        result.message = `Estimated GPU frame time: ${estimatedFrameGpuMs.toFixed(1)}ms — may run slowly. Close other tabs and GPU-heavy apps for best results.`;
+    } else {
+        result.verdict = 'caution';
+        result.message = `Estimated GPU frame time: ${estimatedFrameGpuMs.toFixed(1)}ms — performance will likely be limited. Consider a device with a stronger GPU.`;
+    }
+
+    return result;
+}
+
+function showCapabilityResult(caps) {
+    const container = document.getElementById('capability-result');
+    const gpuEl = document.getElementById('cap-gpu-name');
+    const verdictEl = document.getElementById('cap-verdict');
+    const messageEl = document.getElementById('cap-message');
+    const btnEl = document.getElementById('cap-continue-btn');
+
+    container.style.display = 'block';
+    gpuEl.textContent = caps.adapterName;
+    verdictEl.className = 'cap-verdict ' + caps.verdict;
+
+    if (caps.verdict === 'good') {
+        verdictEl.textContent = 'SYSTEM OK';
+    } else if (caps.verdict === 'caution') {
+        verdictEl.textContent = 'CAUTION';
+    } else {
+        verdictEl.textContent = 'NOT SUPPORTED';
+    }
+    messageEl.textContent = caps.message;
+    if (caps.memoryHint) {
+        messageEl.textContent += ` (${caps.memoryHint}GB RAM detected)`;
+    }
+
+    return new Promise(resolve => {
+        if (caps.verdict === 'good') {
+            // Auto-continue after 1.5s
+            setTimeout(resolve, 1500);
+        } else if (caps.verdict === 'caution') {
+            // Show continue button, auto-continue after 4s
+            btnEl.style.display = 'inline-block';
+            btnEl.onclick = resolve;
+            setTimeout(resolve, 4000);
+        } else {
+            // Unsupported — show error, no auto-continue
+            const bar = document.getElementById('load-progress');
+            if (bar) { bar.style.background = '#f44'; bar.style.width = '100%'; }
+            const statusEl = document.getElementById('load-status-text');
+            if (statusEl) { statusEl.style.color = '#f44'; statusEl.textContent = 'Cannot start game'; }
+            // Never resolve — halts loading
+        }
+    });
+}
+
+// ============================================================
 //  BOOT
 // ============================================================
 async function main() {
@@ -4348,6 +4780,25 @@ async function main() {
         await initTerrainEditor();
         return;
     }
+
+    // Pre-flight system check
+    updateLoadProgress(2, 'Checking system capabilities...');
+    const caps = await checkSystemCapabilities();
+
+    if (caps.verdict === 'unsupported') {
+        await showCapabilityResult(caps);
+        return; // Halt — promise never resolves for unsupported
+    }
+
+    // Show result (auto-continues for good, waits for caution)
+    await showCapabilityResult(caps);
+
+    // Store for later reference (debug overlay, future metrics)
+    window.systemCapabilities = caps;
+
+    // Hide capability result before heavy init
+    document.getElementById('capability-result').style.display = 'none';
+
     try {
         const game = new Game();
         await game.init();
