@@ -1849,9 +1849,14 @@ class Player {
     tryShoot() {
         if (!this.shooting || this.fireTimer > 0) return null;
 
-        // Add heat — check for overheat
+        // Add heat — asymptotic curve: heat gain slows dramatically near max
+        // so 90→95% takes noticeably longer than 85→90%, and 95→100% longer still.
+        // Minimum multiplier of 0.08 ensures you WILL still blow up eventually.
         const hps = this.getHeatPerShot();
-        this.heat += hps;
+        const heatNorm = this.heat / CFG.heat.maxHeat;
+        const resistance = 1 - heatNorm * heatNorm * heatNorm; // cubic falloff
+        const effectiveHeat = hps * Math.max(0.08, resistance);
+        this.heat += effectiveHeat;
         if (this.heat >= CFG.heat.maxHeat) {
             this.heat = CFG.heat.maxHeat;
             return 'overheat'; // caller handles explosion/death
@@ -2531,6 +2536,66 @@ class AudioEngine {
         hw.gain.gain.setTargetAtTime(vol, now, 0.05);
     }
 
+    // Danger siren — warbling two-tone alarm above 90% heat
+    updateHeatSiren(heat) {
+        const threshold = 0.90;
+        const norm = heat / CFG.heat.maxHeat;
+        if (norm < threshold) {
+            if (this._heatSiren) {
+                this._heatSiren.gain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.06);
+            }
+            return;
+        }
+        // Intensity 0→1 mapped from 90%→100%
+        const intensity = (norm - threshold) / (1 - threshold);
+        if (!this._heatSiren) {
+            const ctx = this.ctx;
+            // Two oscillators for the classic wee-woo: square wave for bite
+            const osc1 = ctx.createOscillator();
+            osc1.type = 'square';
+            osc1.frequency.value = 600;
+            const osc2 = ctx.createOscillator();
+            osc2.type = 'sine';
+            osc2.frequency.value = 800;
+            // LFO to modulate between high/low tones (the "wee-woo" warble)
+            const lfo = ctx.createOscillator();
+            lfo.type = 'sine';
+            lfo.frequency.value = 3.5; // warble speed: 3.5 Hz
+            const lfoGain = ctx.createGain();
+            lfoGain.gain.value = 200; // modulation depth in Hz
+            lfo.connect(lfoGain);
+            lfoGain.connect(osc1.frequency);
+            lfoGain.connect(osc2.frequency);
+            // Filter to soften the square wave a bit
+            const filter = ctx.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.value = 2000;
+            filter.Q.value = 1;
+            const gain = ctx.createGain();
+            gain.gain.value = 0;
+            osc1.connect(filter);
+            osc2.connect(filter);
+            filter.connect(gain);
+            gain.connect(this.sfxGain);
+            osc1.start();
+            osc2.start();
+            lfo.start();
+            this._heatSiren = { osc1, osc2, lfo, lfoGain, filter, gain };
+        }
+        const hs = this._heatSiren;
+        const now = this.ctx.currentTime;
+        // Warble speeds up as heat rises: 3.5 → 7 Hz
+        hs.lfo.frequency.setTargetAtTime(3.5 + intensity * 3.5, now, 0.05);
+        // Pitch rises with intensity: 600/800 → 900/1100
+        hs.osc1.frequency.setTargetAtTime(600 + intensity * 300, now, 0.05);
+        hs.osc2.frequency.setTargetAtTime(800 + intensity * 300, now, 0.05);
+        // Modulation depth increases: ±200 → ±350 Hz
+        hs.lfoGain.gain.setTargetAtTime(200 + intensity * 150, now, 0.05);
+        // Volume: fades in gently then gets loud — intensity² curve, max 0.15
+        const vol = intensity * intensity * 0.15;
+        hs.gain.gain.setTargetAtTime(vol, now, 0.04);
+    }
+
     // Continuous rate buzz — gatling "BRRRT" undertone at high fire rates
     // Call every frame with current weapon params and shooting state
     updateRateBuzz(wpnParams, isShooting) {
@@ -3046,6 +3111,52 @@ class DebugOverlay {
 // ============================================================
 //  GAME STATES
 // ============================================================
+// Helper: populate gameover overlay stats (deferred until death cam finishes)
+function populateGameoverStats(game) {
+    const overlay = document.getElementById('gameover-overlay');
+    const kills = game.roundStats.kills;
+    const remain = Math.max(0, ENEMY_COUNT - kills);
+    const mins = Math.floor(game.roundStats.survivalTime / 60);
+    const secs = Math.floor(game.roundStats.survivalTime % 60);
+    const timeStr = `${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
+    const accuracy = game.roundStats.shotsFired > 0
+        ? Math.min(100, Math.round(kills / game.roundStats.shotsFired * 100)) + '%'
+        : '\u2014';
+    const maxStreak = game._kcJuice ? game._kcJuice.maxStreak : 0;
+    game.roundStats.maxStreak = maxStreak;
+    overlay.querySelector('.go-remain').innerHTML =
+        `${remain.toLocaleString()}<span>REMAIN</span>`;
+    const pct = (remain / ENEMY_COUNT) * 100;
+    overlay.querySelector('.go-bar-fill').style.width = pct + '%';
+    overlay.querySelector('.go-stat-line').innerHTML =
+        `\u23F1 <span>${timeStr}</span> &nbsp;\u2502&nbsp; \uD83C\uDFAF <span>${accuracy}</span> &nbsp;\u2502&nbsp; \uD83D\uDC80 <span>${kills.toLocaleString()}</span> &nbsp;\u2502&nbsp; \uD83D\uDD25 <span>${maxStreak.toLocaleString()}</span> streak`;
+    const deathMessages = {
+        overheat: 'Your gun overheated and exploded.',
+        enemies: 'Overwhelmed by the horde.',
+    };
+    const deathHints = {
+        overheat: 'Press R to vent your excess heat.',
+    };
+    const causeEl = overlay.querySelector('.go-death-cause');
+    const msg = deathMessages[game.deathCause] || deathMessages.enemies;
+    const hint = deathHints[game.deathCause] || '';
+    causeEl.innerHTML = msg + (hint ? '<br><span style="color:#8af;font-size:12px;opacity:0.8">' + hint + '</span>' : '');
+    const wp = game.player.wpnParams;
+    const hex = (v) => v.toString(16).padStart(2, '0').toUpperCase();
+    const loadoutHex = `#${hex(wp.spread)}${hex(wp.rate)}${hex(wp.power)}${hex(wp.speed)}`;
+    game.roundStats.loadoutHex = loadoutHex;
+    overlay.querySelector('.go-loadout').innerHTML = `Loadout: <span>${loadoutHex}</span>`;
+    const prevScores = game.getHighScores();
+    const isNewHighScore = prevScores.length === 0 || game.roundStats.survivalTime > prevScores[0].time;
+    game.saveHighScore(game.roundStats);
+    overlay.querySelector('.go-highscore').style.display = isNewHighScore ? 'block' : 'none';
+    analytics.event('game_over', {
+        survival_time: Math.round(game.roundStats.survivalTime),
+        kills: game.roundStats.kills,
+        shots_fired: game.roundStats.shotsFired
+    });
+}
+
 const STATES = {
     attract: {
         enter(game) {
@@ -3110,6 +3221,10 @@ const STATES = {
             game.player.heat = 0;
             game.player.fireTimer = 0;
             game.player.shooting = false;
+            game.player.muzzleFlash.material.opacity = 0;
+            game.player.muzzleFlash.scale.setScalar(1);
+            game.player.barrelGlow = 0;
+            if (game.player.gunBarrel) game.player.gunBarrel.material.emissive.setRGB(0, 0, 0);
             game.deathCause = 'enemies';
             game.roundStats = { survivalTime: 0, kills: 0, shotsFired: 0 };
             game._kcJuice = null;  // Reset kill streak juice
@@ -3157,6 +3272,10 @@ const STATES = {
             game.dropStartY = game.player.position.y;
             game.player.shooting = false;
             document.getElementById('hud').style.display = 'block';
+            // Warm up projectile collision GPU pipelines so the first
+            // frame of playing state doesn't stall on shader compilation
+            game.renderer.compute(game.enemies.computeProjClear);
+            game.renderer.compute(game.enemies.computeProjCollision);
         },
         update(dt, game) {
             const dropSpeed = 150;
@@ -3324,6 +3443,8 @@ const STATES = {
             game.audio.updateVentSound(isVenting, game.player.heat / CFG.heat.maxHeat);
             // Heat whine audio
             game.audio.updateHeatWhine(game.player.heat);
+            // Danger siren: wee-woo alarm above 90% heat
+            game.audio.updateHeatSiren(game.player.heat);
             // Rate buzz: gatling undertone at high fire rates
             game.audio.updateRateBuzz(game.player.wpnParams, game.player.shooting);
             // --- Helper: trigger explosion at a point ---
@@ -3442,77 +3563,126 @@ const STATES = {
             if (document.pointerLockElement) document.exitPointerLock();
             game.player.locked = false;
             game.player.shooting = false;
-            game.audio.updateHeatWhine(0); // silence the whine
-            game.audio.updateRateBuzz(null, false); // silence the buzz
-            game.audio.updateVentSound(false, 0); // silence the vent
-            const overlay = document.getElementById('gameover-overlay');
-            overlay.style.display = 'flex';
+            // Silence persistent audio
+            game.audio.updateHeatWhine(0);
+            game.audio.updateHeatSiren(0);
+            game.audio.updateRateBuzz(null, false);
+            game.audio.updateVentSound(false, 0);
+            // Hide HUD but do NOT show gameover overlay yet
             document.getElementById('hud').style.display = 'none';
             document.getElementById('blocker').style.display = 'none';
-            // Populate stats — "remain" framing
-            const kills = game.roundStats.kills;
-            const remain = Math.max(0, ENEMY_COUNT - kills);
-            const mins = Math.floor(game.roundStats.survivalTime / 60);
-            const secs = Math.floor(game.roundStats.survivalTime % 60);
-            const timeStr = `${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
-            const accuracy = game.roundStats.shotsFired > 0
-                ? Math.min(100, Math.round(kills / game.roundStats.shotsFired * 100)) + '%'
-                : '\u2014';
-            // Max streak
-            const maxStreak = game._kcJuice ? game._kcJuice.maxStreak : 0;
-            game.roundStats.maxStreak = maxStreak;
-            // Hero number
-            overlay.querySelector('.go-remain').innerHTML =
-                `${remain.toLocaleString()}<span>REMAIN</span>`;
-            // Progress bar (fill = % remaining)
-            const pct = (remain / ENEMY_COUNT) * 100;
-            overlay.querySelector('.go-bar-fill').style.width = pct + '%';
-            // Stat line
-            overlay.querySelector('.go-stat-line').innerHTML =
-                `\u23F1 <span>${timeStr}</span> &nbsp;\u2502&nbsp; \uD83C\uDFAF <span>${accuracy}</span> &nbsp;\u2502&nbsp; \uD83D\uDC80 <span>${kills.toLocaleString()}</span> &nbsp;\u2502&nbsp; \uD83D\uDD25 <span>${maxStreak.toLocaleString()}</span> streak`;
-            // Death cause + hint
-            const deathMessages = {
-                overheat: 'Your gun overheated and exploded.',
-                enemies: 'Overwhelmed by the horde.',
-            };
-            const deathHints = {
-                overheat: 'Press R to vent your excess heat.',
-            };
-            const causeEl = overlay.querySelector('.go-death-cause');
-            const msg = deathMessages[game.deathCause] || deathMessages.enemies;
-            const hint = deathHints[game.deathCause] || '';
-            causeEl.innerHTML = msg + (hint ? '<br><span style="color:#8af;font-size:12px;opacity:0.8">' + hint + '</span>' : '');
-            // Gun loadout hex
-            const wp = game.player.wpnParams;
-            const hex = (v) => v.toString(16).padStart(2, '0').toUpperCase();
-            const loadoutHex = `#${hex(wp.spread)}${hex(wp.rate)}${hex(wp.power)}${hex(wp.speed)}`;
-            game.roundStats.loadoutHex = loadoutHex;
-            const loadoutEl = overlay.querySelector('.go-loadout');
-            loadoutEl.innerHTML = `Loadout: <span>${loadoutHex}</span>`;
-            // Check for new high score before saving
-            const prevScores = game.getHighScores();
-            const isNewHighScore = prevScores.length === 0 || game.roundStats.survivalTime > prevScores[0].time;
-            game.saveHighScore(game.roundStats);
-            const hsEl = overlay.querySelector('.go-highscore');
-            hsEl.style.display = isNewHighScore ? 'block' : 'none';
-            analytics.event('game_over', {
-                survival_time: Math.round(game.roundStats.survivalTime),
-                kills: game.roundStats.kills,
-                shots_fired: game.roundStats.shotsFired
+            // Record death position for camera
+            game.deathPos = game.player.position.clone();
+            // Hide weapon
+            game.player.weaponGroup.visible = false;
+            // Big death explosion particles
+            const upDir = new THREE.Vector3(0, 1, 0);
+            game.particles.emit(game.deathPos, upDir, 120, 'explosion', { color: [1, 0.9, 0.7], size: 0.25 });
+            game.renderer.compute(game.particles.computeSpawn);
+            game.particles.emit(game.deathPos, upDir, 80, 'spark');
+            game.renderer.compute(game.particles.computeSpawn);
+            // Spawn large white death sphere (one-off, separate from pool)
+            const dsGeo = new THREE.SphereGeometry(1, 20, 14);
+            const dsMat = new THREE.MeshBasicMaterial({
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0.85,
+                depthWrite: false,
+                blending: THREE.AdditiveBlending,
             });
+            game.deathSphere = new THREE.Mesh(dsGeo, dsMat);
+            game.deathSphere.position.copy(game.deathPos);
+            game.deathSphere.scale.setScalar(0.1);
+            game.scene.add(game.deathSphere);
+            // Also spawn a pool explosion for immediate flash
+            game.explosionSpheres.spawn(game.deathPos, 15, 1.0);
+            game.audio.play('explosion', game.deathPos);
+            // Death cam setup
             game.goTime = 0;
-            game.goCamStart = game.camera.position.clone();
+            game.goPhase = 'deathcam';
+            game.deathTimeScale = 0.3;
+            // Camera launch: mostly upward with slight random XZ for variety
+            const rx = (Math.random() - 0.5) * 6;
+            const rz = (Math.random() - 0.5) * 6;
+            game.deathCamVel = new THREE.Vector3(rx, 40, rz);
+            // Screen shake for impact
+            game.shakeTimer = 0.4;
         },
         update(dt, game) {
-            game.goTime += dt;
-            game.camera.position.y = game.goCamStart.y + game.goTime * 2;
-            game.camera.rotation.x -= dt * 0.02;
-            // Keep particles decaying
-            game.particles.dtU.value = dt;
-            game.renderer.compute(game.particles.computeUpdate);
+            game.goTime += dt; // real time for phase transitions
+
+            if (game.goPhase === 'deathcam') {
+                const slowDt = dt * game.deathTimeScale;
+                // Camera: launch upward with deceleration
+                game.deathCamVel.multiplyScalar(1 - dt * 0.7);
+                game.camera.position.add(game.deathCamVel.clone().multiplyScalar(slowDt));
+                // Swing camera to look down at death position
+                game.camera.lookAt(game.deathPos);
+                // Screen shake during death cam (decays)
+                if (game.shakeTimer > 0) {
+                    game.shakeTimer -= dt;
+                    const intensity = game.shakeTimer * 6;
+                    game.camera.rotation.x += (Math.random() - 0.5) * 0.015 * intensity;
+                    game.camera.rotation.y += (Math.random() - 0.5) * 0.015 * intensity;
+                }
+                // Death sphere: expand and fade over 2.5s
+                if (game.deathSphere && game.deathSphere.visible) {
+                    const t = Math.min(1, game.goTime / 2.5);
+                    const ease = 1 - Math.pow(1 - t, 2);
+                    game.deathSphere.scale.setScalar(0.5 + ease * 28);
+                    game.deathSphere.material.opacity = 0.85 * (1 - t * t);
+                    if (t >= 1) game.deathSphere.visible = false;
+                }
+                // Ramp time scale back toward 1.0 gradually
+                game.deathTimeScale = Math.min(1, game.deathTimeScale + dt * 0.18);
+                // Keep particles + explosion spheres updating in slow time
+                game.particles.dtU.value = slowDt;
+                game.renderer.compute(game.particles.computeUpdate);
+                game.explosionSpheres.update(slowDt);
+                // Keep enemies moving for dramatic effect
+                game.profiler.mark('enemyCompute');
+                game.enemies.syncUniforms(slowDt, game.deathPos, game.camera.position);
+                game.enemies.updateDensity(slowDt, game.renderer);
+                game.renderer.compute(game.enemies.computeUpdate);
+                game.renderer.compute(game.enemies.computePhysics);
+                game.profiler.markEnd('enemyCompute');
+                // After ~3.5s real-time, transition to stats phase
+                if (game.goTime > 3.5) {
+                    game.goPhase = 'stats';
+                    populateGameoverStats(game);
+                    const overlay = document.getElementById('gameover-overlay');
+                    overlay.style.opacity = '0';
+                    overlay.style.transition = 'opacity 1.2s ease-in';
+                    overlay.style.display = 'flex';
+                    requestAnimationFrame(() => { overlay.style.opacity = '1'; });
+                }
+            } else {
+                // Stats phase: gentle camera drift continues
+                game.camera.position.y += dt * 1.5;
+                game.camera.lookAt(game.deathPos);
+                // Keep particles + enemies decaying
+                game.particles.dtU.value = dt;
+                game.renderer.compute(game.particles.computeUpdate);
+                game.enemies.syncUniforms(dt, game.deathPos, game.camera.position);
+                game.renderer.compute(game.enemies.computeUpdate);
+                game.renderer.compute(game.enemies.computePhysics);
+            }
         },
         exit(game) {
-            document.getElementById('gameover-overlay').style.display = 'none';
+            // Clean up death sphere
+            if (game.deathSphere) {
+                game.scene.remove(game.deathSphere);
+                game.deathSphere.geometry.dispose();
+                game.deathSphere.material.dispose();
+                game.deathSphere = null;
+            }
+            // Restore weapon visibility
+            game.player.weaponGroup.visible = true;
+            // Reset overlay
+            const overlay = document.getElementById('gameover-overlay');
+            overlay.style.display = 'none';
+            overlay.style.opacity = '';
+            overlay.style.transition = '';
             document.getElementById('damage-overlay').style.boxShadow = 'none';
         }
     }
