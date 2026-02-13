@@ -417,7 +417,20 @@ class SimplexNoise {
 // ============================================================
 //  CONFIG
 // ============================================================
-const ENEMY_COUNT = 1024 * 1024; // ~1 million
+const ENEMY_COUNT_OPTIONS = [10000, 100000, 250000, 500000, 750000, 1048576];
+const ENEMY_COUNT_LABELS = ['10K', '100K', '250K', '500K', '750K', '1M'];
+let ENEMY_COUNT = (() => {
+    try {
+        const stored = parseInt(localStorage.getItem('m2o_enemyCount'));
+        if (ENEMY_COUNT_OPTIONS.includes(stored)) return stored;
+    } catch(e) {}
+    return 1048576; // default ~1 million
+})();
+function fmtEnemyCount(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return Math.round(n / 1000) + 'K';
+    return n.toString();
+}
 
 const CFG = {
     terrain: { seed: 1135, octaves: 6, frequency: 0.003, amplitude: 50, lacunarity: 2.1, persistence: 0.48, offset: 25, resolution: 2048 },
@@ -2854,7 +2867,7 @@ class DebugOverlay {
     build() {
         this.el.innerHTML = '';
         const header = document.createElement('div'); header.className = 'debug-header';
-        header.innerHTML = `<span>DEBUG (WebGPU) - ${(ENEMY_COUNT/1000000).toFixed(1)}M enemies</span><span style="color:#666;font-size:11px">~</span>`;
+        header.innerHTML = `<span>DEBUG (WebGPU) - ${fmtEnemyCount(ENEMY_COUNT)} enemies</span><span style="color:#666;font-size:11px">~</span>`;
         this.el.appendChild(header);
 
         this.statsEl = document.createElement('div'); this.statsEl.className = 'debug-stats'; this.el.appendChild(this.statsEl);
@@ -3024,7 +3037,7 @@ class DebugOverlay {
     }
     updateStats(fps, player) {
         this.statsEl.innerHTML =
-            `FPS: ${fps} | Enemies: ${(ENEMY_COUNT/1000000).toFixed(1)}M (GPU)<br>` +
+            `FPS: ${fps} | Enemies: ${fmtEnemyCount(ENEMY_COUNT)} (GPU)<br>` +
             `Pos: ${player.position.x.toFixed(0)}, ${player.position.y.toFixed(0)}, ${player.position.z.toFixed(0)} | ` +
             `HP: ${player.health.toFixed(0)} | Ammo: ${player.ammo}`;
     }
@@ -3579,7 +3592,7 @@ class Game {
         this.audio = new AudioEngine(this.camera);
 
         // GPU Enemies
-        updateLoadProgress(50, `Spawning ${(ENEMY_COUNT/1000000).toFixed(1)}M enemies...`);
+        updateLoadProgress(50, `Spawning ${fmtEnemyCount(ENEMY_COUNT)} enemies...`);
         this.enemies = new GPUEnemySystem(this.scene, this.terrain);
         await this.renderer.computeAsync(this.enemies.computeInit);
 
@@ -3896,6 +3909,85 @@ class Game {
         };
         handRow.appendChild(handBtn);
         settingsPanel.appendChild(handRow);
+
+        // --- Enemy Count selector ---
+        const enemySection = document.createElement('div');
+        enemySection.style.cssText = 'margin-top:16px;padding-top:14px;border-top:1px solid rgba(136,170,255,0.1)';
+        const enemyTitle = document.createElement('div');
+        enemyTitle.style.cssText = 'color:#8af;font-size:12px;letter-spacing:1.5px;margin-bottom:10px;text-transform:uppercase';
+        enemyTitle.textContent = 'Enemy Count';
+        enemySection.appendChild(enemyTitle);
+
+        const enemyRow = document.createElement('div');
+        enemyRow.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px';
+        const currentCount = ENEMY_COUNT;
+        ENEMY_COUNT_OPTIONS.forEach((count, i) => {
+            const btn = document.createElement('button');
+            btn.className = 'menu-btn';
+            btn.style.cssText = 'display:inline-block;width:auto;padding:6px 12px;font-size:12px;margin:0;letter-spacing:1px';
+            btn.textContent = ENEMY_COUNT_LABELS[i];
+            if (count === currentCount) {
+                btn.style.background = 'rgba(136,170,255,0.2)';
+                btn.style.borderColor = '#8af';
+                btn.style.color = '#fff';
+            }
+            btn.onclick = () => {
+                if (count === currentCount) return;
+                try { localStorage.setItem('m2o_enemyCount', count); } catch(e) {}
+                location.reload();
+            };
+            enemyRow.appendChild(btn);
+        });
+        enemySection.appendChild(enemyRow);
+
+        const enemyNote = document.createElement('div');
+        enemyNote.style.cssText = 'color:#555;font-size:10px;letter-spacing:0.5px;line-height:1.5';
+        enemyNote.textContent = 'Changing enemy count will restart the game.';
+        enemySection.appendChild(enemyNote);
+        settingsPanel.appendChild(enemySection);
+
+        // --- System Info ---
+        const sysSection = document.createElement('div');
+        sysSection.style.cssText = 'margin-top:16px;padding-top:14px;border-top:1px solid rgba(136,170,255,0.1)';
+        const sysTitle = document.createElement('div');
+        sysTitle.style.cssText = 'color:#8af;font-size:12px;letter-spacing:1.5px;margin-bottom:8px;text-transform:uppercase';
+        sysTitle.textContent = 'System Info';
+        sysSection.appendChild(sysTitle);
+
+        const caps = window.systemCapabilities;
+        if (caps) {
+            const lines = [
+                { label: 'GPU', value: caps.adapterName, color: '#ccc' },
+                { label: 'Benchmark', value: caps.benchmarkMs >= 0 ? caps.benchmarkMs.toFixed(1) + 'ms' : 'N/A', color: caps.benchmarkMs < 5 ? '#4e4' : caps.benchmarkMs < 15 ? '#fa4' : '#f44' },
+                { label: 'Verdict', value: caps.verdict.toUpperCase(), color: caps.verdict === 'good' ? '#4e4' : caps.verdict === 'caution' ? '#fa4' : '#f44' },
+            ];
+            if (caps.memoryHint) lines.push({ label: 'RAM', value: caps.memoryHint + 'GB', color: '#ccc' });
+            if (caps.estimatedMaxEnemies > 0) {
+                const maxE = caps.estimatedMaxEnemies;
+                const maxLabel = maxE >= 1000000 ? (maxE / 1000000).toFixed(1) + 'M' : maxE >= 1000 ? Math.round(maxE / 1000) + 'K' : maxE.toString();
+                lines.push({ label: 'Est. Max Enemies', value: '~' + maxLabel + ' @60fps', color: maxE >= ENEMY_COUNT ? '#4e4' : '#fa4' });
+            }
+            lines.forEach(l => {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex;justify-content:space-between;padding:2px 0;font-size:11px';
+                const lbl = document.createElement('span');
+                lbl.style.color = '#666';
+                lbl.textContent = l.label;
+                const val = document.createElement('span');
+                val.style.cssText = `color:${l.color};letter-spacing:0.5px`;
+                val.textContent = l.value;
+                row.appendChild(lbl);
+                row.appendChild(val);
+                sysSection.appendChild(row);
+            });
+        } else {
+            const na = document.createElement('div');
+            na.style.cssText = 'color:#555;font-size:11px';
+            na.textContent = 'System check data unavailable.';
+            sysSection.appendChild(na);
+        }
+        settingsPanel.appendChild(sysSection);
+
         const settingsBack = document.createElement('button');
         settingsBack.className = 'menu-btn back-btn';
         settingsBack.textContent = 'BACK';
@@ -4601,7 +4693,7 @@ async function checkSystemCapabilities() {
     if (maxStorageBuf < neededStorageBytes) {
         result.webgpu = true;
         result.verdict = 'caution';
-        result.message = `GPU storage buffer limit (${(maxStorageBuf / 1048576).toFixed(0)}MB) is tight for ${(ENEMY_COUNT/1e6).toFixed(1)}M enemies (need ~${(neededStorageBytes / 1048576).toFixed(0)}MB). May need to reduce enemy count.`;
+        result.message = `GPU storage buffer limit (${(maxStorageBuf / 1048576).toFixed(0)}MB) is tight for ${fmtEnemyCount(ENEMY_COUNT)} enemies (need ~${(neededStorageBytes / 1048576).toFixed(0)}MB). May need to reduce enemy count.`;
     }
 
     // 4. Request a test device with our required limits
