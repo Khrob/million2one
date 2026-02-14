@@ -432,16 +432,23 @@ function fmtEnemyCount(n) {
     return n.toString();
 }
 
+// Weapon sandbox mode: #weapon in URL → small smooth world, no enemies, tuning UI
+const WEAPON_SANDBOX = window.location.hash.includes('weapon');
+if (WEAPON_SANDBOX) ENEMY_COUNT = 1; // minimal GPU allocation, no real enemies
+
 const CFG = {
-    terrain: { seed: 1135, octaves: 6, frequency: 0.003, amplitude: 50, lacunarity: 2.1, persistence: 0.48, offset: 25, resolution: 2048 },
+    terrain: WEAPON_SANDBOX
+        ? { seed: 42, octaves: 2, frequency: 0.0015, amplitude: 12, lacunarity: 2.0, persistence: 0.35, offset: 4, resolution: 256 }
+        : { seed: 1135, octaves: 6, frequency: 0.003, amplitude: 50, lacunarity: 2.1, persistence: 0.48, offset: 25, resolution: 2048 },
     player: { walkSpeed: 8, sprintMult: 1.8, jumpForce: 12, gravity: 28, height: 3.6, slopeEffect: 0.7, maxHealth: 100 },
     enemies: { speed: 1.75, health: 33, damage: 8, attackRange: 3, attackRate: 1.0, size: 1.2, cullDistance: 1500, flowInfluence: 0.3 },
     weapon: { damage: 200, fireRate: 5, range: 500, maxAmmo: 30, spread: 0.015, hitRadius: 1.8, convergeDist: 60, barrelX: 0.2, barrelY: -0.14, barrelZ: -0.65 },
     heat: { maxHeat: 100, coolRate: 5, spreadCost: 0.3, rateCost: 1.5, powerCost: 1.2, speedCost: 0.8, ventRate: 33.3, thrustMult: 1.5, warningThreshold: 80 },
     handedness: 'left',  // 'left' = gun on left side (southpaw), 'right' = gun on right side
     pickups: { healthAmount: 50, ammoAmount: 15, bobSpeed: 2, bobHeight: 0.3, dropChance: 0.006, dropLifetime: 20 },
-    lighting: { sunIntensity: 1.8, sunX: 0.5, sunY: 1.0, sunZ: 0.3, ambientIntensity: 0.45, fogNear: 400, fogFar: 1200, fogColor: '#adb8c7' },
-    world: { size: 10000 },
+    lighting: { sunIntensity: 1.8, sunX: 0.5, sunY: 1.0, sunZ: 0.3, ambientIntensity: 0.45,
+               fogNear: WEAPON_SANDBOX ? 200 : 400, fogFar: WEAPON_SANDBOX ? 500 : 1200, fogColor: '#adb8c7' },
+    world: { size: WEAPON_SANDBOX ? 800 : 10000 },
     flowMap: { resolution: 64, updateInterval: 0.25 },
     particles: { poolSize: 2097152, muzzleCount: 12, trailCount: 20, bloodCount: 25, sparkCount: 15, explosionCount: 50, explosionSparkCount: 30 },
     projectile: { speed: 120, gravity: 30, size: 0.15, maxLife: 5, poolSize: 64, trailInterval: 0.05, explosionRadius: 25, explosionForce: 40, explosionDamage: 60 },
@@ -1578,12 +1585,12 @@ class ProjectileSystem {
             const mesh = new THREE.Mesh(geo, mat);
             mesh.visible = false;
             scene.add(mesh);
-            this.pool.push({ mesh, mat, pos: new THREE.Vector3(), prevPos: new THREE.Vector3(), vel: new THREE.Vector3(), active: false, life: 0, trailTimer: 0, powerNorm: 0.5, speedNorm: 0.5 });
+            this.pool.push({ mesh, mat, pos: new THREE.Vector3(), prevPos: new THREE.Vector3(), vel: new THREE.Vector3(), active: false, life: 0, trailTimer: 0, powerNorm: 0.5, speedNorm: 0.5, explosionRadius: CFG.projectile.explosionRadius, explosionForce: CFG.projectile.explosionForce });
         }
         this.nextIdx = 0;
     }
 
-    fire(origin, direction, speed, damage, wpnParams) {
+    fire(origin, direction, speed, damage, wpnParams, life, explosionRadius, explosionForce) {
         const p = this.pool[this.nextIdx];
         this.nextIdx = (this.nextIdx + 1) % this.POOL_SIZE;
         p.pos.copy(origin);
@@ -1591,7 +1598,9 @@ class ProjectileSystem {
         p.vel.copy(direction).multiplyScalar(speed || CFG.projectile.speed);
         p.damage = damage || CFG.projectile.explosionDamage;
         p.active = true;
-        p.life = CFG.projectile.maxLife;
+        p.life = life || CFG.projectile.maxLife;
+        p.explosionRadius = explosionRadius || CFG.projectile.explosionRadius;
+        p.explosionForce = explosionForce || CFG.projectile.explosionForce;
         p.trailTimer = 0;
         p.mesh.visible = true;
         p.mesh.position.copy(origin);
@@ -1614,8 +1623,11 @@ class ProjectileSystem {
             if (!p.active) continue;
             // Save previous position for swept collision
             p.prevPos.copy(p.pos);
-            // Physics
-            p.vel.y -= CFG.projectile.gravity * dt;
+            // Physics — gravity scales down with speed so fast shots fly flat,
+            // slow shots arc gently (not like grenades)
+            const spd = Math.sqrt(p.vel.x * p.vel.x + p.vel.y * p.vel.y + p.vel.z * p.vel.z);
+            const gravScale = Math.min(1, spd / 200); // full gravity at 200+ m/s, reduced below
+            p.vel.y -= CFG.projectile.gravity * gravScale * dt;
             p.pos.addScaledVector(p.vel, dt);
             p.mesh.position.copy(p.pos);
             // Trail particles — vary with weapon params
@@ -1638,7 +1650,7 @@ class ProjectileSystem {
             const th = this.terrain.getHeight(p.pos.x, p.pos.z);
             if (p.pos.y <= th) {
                 p.active = false; p.mesh.visible = false;
-                impacts.push({ pos: new THREE.Vector3(p.pos.x, th, p.pos.z), damage: p.damage || CFG.projectile.explosionDamage });
+                impacts.push({ pos: new THREE.Vector3(p.pos.x, th, p.pos.z), damage: p.damage || CFG.projectile.explosionDamage, explosionRadius: p.explosionRadius, explosionForce: p.explosionForce });
                 continue;
             }
             // Out of bounds
@@ -1667,10 +1679,10 @@ class Player {
         this.fireTimer = 0;
         this.shooting = false;
         // Weapon parameters (0–255 each)
-        this.wpnParams = { spread: 220, rate: 50, power: 180, speed: 80 };
+        this.wpnParams = { spread: 230, rate: 50, power: 160, speed: 60 };
         this.wpnPresets = [
-            { spread: 220, rate: 50, power: 180, speed: 80 },   // 7: Shotgun — wide, punchy, slow projectiles
-            { spread: 5, rate: 20, power: 255, speed: 255 },    // 8: Sniper — tight, slow fire, devastating
+            { spread: 230, rate: 50, power: 160, speed: 60 },   // 7: Shotgun — wall of pellets, close-range devastation
+            { spread: 5, rate: 20, power: 255, speed: 255 },    // 8: Sniper — single massive boom at long range
             { spread: 255, rate: 255, power: 255, speed: 255 }, // 9: GIVE IT ALL YOU'VE GOT
         ];
         this.heat = 0;
@@ -1840,39 +1852,76 @@ class Player {
         return CFG.heat.spreadCost * s + CFG.heat.rateCost * r + CFG.heat.powerCost * p + CFG.heat.speedCost * f;
     }
 
-    // Derived weapon stats from params
+    // Raw weapon stats (kept for backward compat / UI display)
     getFireRate() { return 2 + (this.wpnParams.rate / 255) * 18; } // 2–20 shots/sec
     getSpread() { return (this.wpnParams.spread / 255) * 1.047; } // 0–60° in radians
     getProjectileSpeed() { return 30 + (this.wpnParams.speed / 255) * 270; } // 30–300 m/s
     getDamage() { return 1 + (this.wpnParams.power / 255) * 99; } // 1–100
 
+    // Soft-coupled derived weapon stats: raw params cross-influence each other
+    // to make archetypes emerge naturally (shotgun = close-range wall of pellets,
+    // sniper = single devastating long-range shot, flamethrower = rapid weak stream)
+    getDerivedWeaponStats() {
+        const s = this.wpnParams.spread / 255;
+        const r = this.wpnParams.rate / 255;
+        const p = this.wpnParams.power / 255;
+        const f = this.wpnParams.speed / 255;
+
+        // 1. Spread → more pellets (1–12)
+        const pelletCount = 1 + Math.floor(s * 11);
+
+        // 2. Fire rate (unchanged)
+        const fireRate = 2 + r * 18;
+
+        // 3. Spread → speed penalty (-50% at max spread)
+        const baseSpeed = 30 + f * 270;
+        const effectiveSpeed = baseSpeed * (1 - s * 0.5);
+
+        // 4. Spread → shorter life, Speed → longer life
+        const effectiveLife = (1.5 + f * 5) * (1 - s * 0.5);
+
+        // 5. Rate → per-hit damage penalty (-35% at max rate), split across pellets
+        const baseDamage = 1 + p * 99;
+        const damagePerPellet = (baseDamage * (1 - r * 0.35)) / pelletCount;
+
+        // 6. Spread angle (unchanged)
+        const spreadAngle = s * 1.047;
+
+        // 7. Spread → smaller explosion radius per pellet
+        const baseRadius = CFG.projectile.explosionRadius * (0.3 + p * 0.85);
+        const effectiveRadius = (baseRadius / Math.sqrt(pelletCount)) * (1 - s * 0.3);
+        const effectiveForce = CFG.projectile.explosionForce * (effectiveRadius / CFG.projectile.explosionRadius);
+
+        // Heat (unchanged formula)
+        const heatPerShot = CFG.heat.spreadCost * s + CFG.heat.rateCost * r + CFG.heat.powerCost * p + CFG.heat.speedCost * f;
+
+        return { pelletCount, fireRate, effectiveSpeed, effectiveLife,
+                 damagePerPellet, spreadAngle, effectiveRadius, effectiveForce, heatPerShot };
+    }
+
     tryShoot() {
         if (!this.shooting || this.fireTimer > 0) return null;
+
+        // Get all soft-coupled derived stats
+        const stats = this.getDerivedWeaponStats();
 
         // Add heat — asymptotic curve: heat gain slows dramatically near max
         // so 90→95% takes noticeably longer than 85→90%, and 95→100% longer still.
         // Minimum multiplier of 0.08 ensures you WILL still blow up eventually.
-        const hps = this.getHeatPerShot();
         const heatNorm = this.heat / CFG.heat.maxHeat;
         const resistance = 1 - heatNorm * heatNorm * heatNorm; // cubic falloff
-        const effectiveHeat = hps * Math.max(0.08, resistance);
+        const effectiveHeat = stats.heatPerShot * Math.max(0.08, resistance);
         this.heat += effectiveHeat;
         if (this.heat >= CFG.heat.maxHeat) {
             this.heat = CFG.heat.maxHeat;
             return 'overheat'; // caller handles explosion/death
         }
 
-        this.fireTimer = 1 / this.getFireRate();
+        this.fireTimer = 1 / stats.fireRate;
         this.pitch += 0.01;
         this.weaponGroup.position.z = 0.04;
 
-        // Multi-pellet: high spread = more pellets, each with split damage
         const spreadNorm = this.wpnParams.spread / 255;
-        const pelletCount = 1 + Math.floor(spreadNorm * 5); // 1–6 pellets
-        const totalDamage = this.getDamage();
-        const pelletDamage = totalDamage / pelletCount;
-        const speed = this.getProjectileSpeed();
-        const spread = this.getSpread();
 
         // Muzzle flash: size scales with spread, color with power
         const pw = this.wpnParams.power / 255;
@@ -1881,20 +1930,40 @@ class Player {
         this.muzzleFlash.material.opacity = 1;
 
         const side = this.handSide || (CFG.handedness === 'left' ? -1 : 1);
-        const shots = [];
-        for (let i = 0; i < pelletCount; i++) {
-            // Each pellet gets its own random spread offset
-            const aimDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
-            aimDir.x += (Math.random() - 0.5) * spread;
-            aimDir.y += (Math.random() - 0.5) * spread;
-            aimDir.normalize();
+        // Compute barrel world position ONCE for all pellets
+        const barrelLocal = new THREE.Vector3(CFG.weapon.barrelX * side, CFG.weapon.barrelY, CFG.weapon.barrelZ);
+        const barrelWorldPos = barrelLocal.applyQuaternion(this.camera.quaternion).add(this.camera.position);
+        // Base aim direction (camera forward)
+        const baseAim = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+        // Camera-local axes for cone spread (right and up in view space)
+        const camRight = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
+        const camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion);
 
-            const barrelOffset = new THREE.Vector3(CFG.weapon.barrelX * side, CFG.weapon.barrelY, CFG.weapon.barrelZ);
-            const barrelWorldPos = barrelOffset.applyQuaternion(this.camera.quaternion).add(this.camera.position);
-            const convergePoint = this.camera.position.clone().addScaledVector(aimDir, CFG.weapon.convergeDist);
+        const shots = [];
+        for (let i = 0; i < stats.pelletCount; i++) {
+            // Cone spread: random angle + random radius (sqrt for uniform disk)
+            const angle = Math.random() * Math.PI * 2;
+            const radius = Math.sqrt(Math.random()) * stats.spreadAngle;
+            const offR = Math.cos(angle) * radius;
+            const offU = Math.sin(angle) * radius;
+            // Offset the aim direction in camera-local space
+            const pelletDir = baseAim.clone()
+                .addScaledVector(camRight, offR)
+                .addScaledVector(camUp, offU)
+                .normalize();
+            // All pellets share the same barrel origin, direction varies
+            const convergePoint = barrelWorldPos.clone().addScaledVector(pelletDir, CFG.weapon.convergeDist);
             const barrelDir = convergePoint.sub(barrelWorldPos).normalize();
 
-            shots.push({ origin: barrelWorldPos, direction: barrelDir, speed, damage: pelletDamage });
+            shots.push({
+                origin: barrelWorldPos.clone(),
+                direction: barrelDir,
+                speed: stats.effectiveSpeed,
+                damage: stats.damagePerPellet,
+                life: stats.effectiveLife,
+                explosionRadius: stats.effectiveRadius,
+                explosionForce: stats.effectiveForce,
+            });
         }
         return shots; // Array of pellet shots
     }
@@ -3415,7 +3484,7 @@ const STATES = {
                 game.renderer.compute(game.particles.computeSpawn);
                 // Fire each pellet
                 for (const shot of shots) {
-                    game.projectiles.fire(shot.origin, shot.direction, shot.speed, shot.damage, game.player.wpnParams);
+                    game.projectiles.fire(shot.origin, shot.direction, shot.speed, shot.damage, game.player.wpnParams, shot.life, shot.explosionRadius, shot.explosionForce);
                 }
                 game.audio.play('gunshot', null, game.player.wpnParams);
             }
@@ -3448,15 +3517,16 @@ const STATES = {
             // Rate buzz: gatling undertone at high fire rates
             game.audio.updateRateBuzz(game.player.wpnParams, game.player.shooting);
             // --- Helper: trigger explosion at a point ---
-            const triggerExplosion = (impactPos, damage) => {
+            const triggerExplosion = (impactPos, damage, radius, force) => {
                 game.pickupManager.recordHitPosition(impactPos);
                 const upDir = new THREE.Vector3(0, 1, 0);
-                // Scale explosion visuals/physics with damage
+                // Use per-projectile radius/force if provided, else scale from damage
                 const damageNorm = Math.min(1, damage / 100);
-                const radiusScale = CFG.projectile.explosionRadius * (0.4 + damageNorm * 0.8);
-                const forceScale = CFG.projectile.explosionForce * (0.3 + damageNorm * 0.7);
-                const expCount = Math.max(8, Math.round(CFG.particles.explosionCount * (0.3 + damageNorm * 0.7)));
-                const sparkCount = Math.max(4, Math.round(CFG.particles.explosionSparkCount * (0.3 + damageNorm * 0.7)));
+                const radiusScale = radius != null ? radius : CFG.projectile.explosionRadius * (0.4 + damageNorm * 0.8);
+                const forceScale = force != null ? force : CFG.projectile.explosionForce * (0.3 + damageNorm * 0.7);
+                const radiusNorm = Math.min(1, radiusScale / CFG.projectile.explosionRadius);
+                const expCount = Math.max(8, Math.round(CFG.particles.explosionCount * (0.3 + radiusNorm * 0.7)));
+                const sparkCount = Math.max(4, Math.round(CFG.particles.explosionSparkCount * (0.3 + radiusNorm * 0.7)));
                 // Explosion color shifts: orange (low) → bright red-white (high)
                 const expOvr = { color: [1.0, 0.5 - damageNorm * 0.2, 0.1 + damageNorm * 0.2] };
                 game.particles.emit(impactPos, upDir, expCount, 'explosion', expOvr);
@@ -3492,13 +3562,13 @@ const STATES = {
                     const dmg = p.damage || CFG.projectile.explosionDamage;
                     p.active = false;
                     p.mesh.visible = false;
-                    triggerExplosion(hitPos, dmg);
+                    triggerExplosion(hitPos, dmg, p.explosionRadius, p.explosionForce);
                 }
             }
             // Terrain impacts (ground collision)
             const impacts = game.projectiles.update(dt, game.particles, game.renderer);
             for (const impact of impacts) {
-                triggerExplosion(impact.pos, impact.damage);
+                triggerExplosion(impact.pos, impact.damage, impact.explosionRadius, impact.explosionForce);
             }
             // Upload projectile positions + run GPU collision (readback happens after render in animate)
             game.profiler.mark('projCollision');
@@ -3685,6 +3755,157 @@ const STATES = {
             overlay.style.transition = '';
             document.getElementById('damage-overlay').style.boxShadow = 'none';
         }
+    },
+
+    // ── Weapon Sandbox ──────────────────────────────────
+    weapontest: {
+        enter(game) {
+            game.setActiveCamera(game.camera);
+            // Hide all normal overlays
+            document.getElementById('menu-overlay').style.display = 'none';
+            document.getElementById('pregame-overlay').style.display = 'none';
+            document.getElementById('gameover-overlay').style.display = 'none';
+            document.getElementById('blocker').style.display = 'none';
+            document.getElementById('hud').style.display = 'block';
+            // Show weapon sandbox panel
+            const panel = document.getElementById('wpn-sandbox-panel');
+            if (panel) panel.style.display = 'block';
+            // Place player on ground at origin
+            const spawnY = game.terrain.getHeight(0, 0) + CFG.player.height;
+            game.player.position.set(0, spawnY, 0);
+            game.player.velocity.set(0, 0, 0);
+            game.player.health = CFG.player.maxHealth;
+            game.player.heat = 0;
+            game.player.grounded = true;
+            game.player.weaponGroup.visible = true;
+            game.player.locked = true;
+            game.player.shooting = false;
+            // Request pointer lock
+            game.renderer.domElement.requestPointerLock();
+            // Hide enemy mesh
+            if (game.enemies.mesh) game.enemies.mesh.visible = false;
+        },
+        update(dt, game) {
+            if (!game.player.locked) return;
+            game.player.update(dt);
+            // Screen shake
+            if (game.shakeTimer > 0) {
+                game.shakeTimer -= dt;
+                const intensity = game.shakeTimer * 8;
+                game.camera.rotation.x += (Math.random() - 0.5) * 0.02 * intensity;
+                game.camera.rotation.y += (Math.random() - 0.5) * 0.02 * intensity;
+            }
+            // Shooting (same as playing, but no enemies/death)
+            const shots = game.player.tryShoot();
+            if (shots === 'overheat') {
+                // Just reset heat, don't kill
+                game.player.heat = 0;
+                const pos = game.player.position.clone();
+                const upDir = new THREE.Vector3(0, 1, 0);
+                game.particles.emit(pos, upDir, 80, 'explosion');
+                game.renderer.compute(game.particles.computeSpawn);
+                game.particles.emit(pos, upDir, 50, 'spark');
+                game.renderer.compute(game.particles.computeSpawn);
+                game.audio.play('explosion');
+                game.shakeTimer = 0.6;
+            } else if (shots && shots.length) {
+                const firstShot = shots[0];
+                const pw = game.player.wpnParams.power / 255;
+                const sd = game.player.wpnParams.spread / 255;
+                const muzzleOvr = {
+                    color: [1.0, 0.9 - pw * 0.6, 0.3 - pw * 0.2],
+                    size: 0.06 + sd * 0.06,
+                };
+                game.particles.emit(firstShot.origin, firstShot.direction, CFG.particles.muzzleCount, 'muzzle', muzzleOvr);
+                game.renderer.compute(game.particles.computeSpawn);
+                const exhaustOvr = {
+                    color: [1.0, 0.8 - pw * 0.5, 0.3 - pw * 0.2],
+                    size: 0.08 + pw * 0.08,
+                };
+                game.particles.emit(firstShot.origin, firstShot.direction, 40, 'exhaust', exhaustOvr);
+                game.renderer.compute(game.particles.computeSpawn);
+                for (const shot of shots) {
+                    game.projectiles.fire(shot.origin, shot.direction, shot.speed, shot.damage, game.player.wpnParams, shot.life, shot.explosionRadius, shot.explosionForce);
+                }
+                game.audio.play('gunshot', null, game.player.wpnParams);
+            }
+            // Venting
+            if (game.player.keys['KeyR'] && game.player.heat > 0) {
+                const ventAmount = CFG.heat.ventRate * dt;
+                const actualVent = Math.min(game.player.heat, ventAmount);
+                game.player.heat -= actualVent;
+                const thrust = actualVent * CFG.heat.thrustMult;
+                if (game.player.grounded) {
+                    game.player.velocity.y = Math.max(game.player.velocity.y, 3);
+                    game.player.position.y += 0.05;
+                }
+                game.player.velocity.y += thrust;
+                game.player.grounded = false;
+                game.player.shooting = false;
+            }
+            // Audio
+            const isVenting = game.player.keys['KeyR'] && game.player.heat > 0;
+            game.audio.updateVentSound(isVenting, game.player.heat / CFG.heat.maxHeat);
+            game.audio.updateHeatWhine(game.player.heat);
+            game.audio.updateHeatSiren(game.player.heat);
+            game.audio.updateRateBuzz(game.player.wpnParams, game.player.shooting);
+            // Terrain explosion helper (no enemy damage, just visuals + knockback)
+            const triggerExplosion = (impactPos, damage, radius, force) => {
+                const upDir = new THREE.Vector3(0, 1, 0);
+                const damageNorm = Math.min(1, damage / 100);
+                const radiusScale = radius != null ? radius : CFG.projectile.explosionRadius * (0.4 + damageNorm * 0.8);
+                const forceScale = force != null ? force : CFG.projectile.explosionForce * (0.3 + damageNorm * 0.7);
+                const radiusNorm = Math.min(1, radiusScale / CFG.projectile.explosionRadius);
+                const expCount = Math.max(8, Math.round(CFG.particles.explosionCount * (0.3 + radiusNorm * 0.7)));
+                const sparkCount = Math.max(4, Math.round(CFG.particles.explosionSparkCount * (0.3 + radiusNorm * 0.7)));
+                const expOvr = { color: [1.0, 0.5 - damageNorm * 0.2, 0.1 + damageNorm * 0.2] };
+                game.particles.emit(impactPos, upDir, expCount, 'explosion', expOvr);
+                game.renderer.compute(game.particles.computeSpawn);
+                game.particles.emit(impactPos, upDir, sparkCount, 'spark');
+                game.renderer.compute(game.particles.computeSpawn);
+                game.explosionSpheres.spawn(impactPos, radiusScale, damageNorm);
+                game.audio.play('explosion', impactPos);
+                // Self-knockback
+                const toPlayer = game.player.position.clone().sub(impactPos);
+                const playerDist = toPlayer.length();
+                if (playerDist < radiusScale * 1.5) {
+                    const falloff = 1 - Math.min(1, playerDist / (radiusScale * 1.5));
+                    const knockForce = forceScale * 0.6 * falloff;
+                    if (playerDist > 0.5) toPlayer.normalize();
+                    game.player.velocity.x += toPlayer.x * knockForce;
+                    game.player.velocity.z += toPlayer.z * knockForce;
+                    game.player.velocity.y += knockForce * 0.5;
+                    game.player.grounded = false;
+                }
+            };
+            // Terrain impacts (no GPU enemy collision in sandbox)
+            const impacts = game.projectiles.update(dt, game.particles, game.renderer);
+            for (const impact of impacts) {
+                triggerExplosion(impact.pos, impact.damage, impact.explosionRadius, impact.explosionForce);
+            }
+            // Particles + explosion spheres
+            game.particles.dtU.value = dt;
+            game.renderer.compute(game.particles.computeUpdate);
+            game.explosionSpheres.update(dt);
+            // Audio sync
+            game.audio.syncVolumes();
+            // Lighting
+            game.sunLight.intensity = CFG.lighting.sunIntensity;
+            game.sunLight.position.set(CFG.lighting.sunX, CFG.lighting.sunY, CFG.lighting.sunZ).normalize().multiplyScalar(400);
+            game.ambientLight.intensity = CFG.lighting.ambientIntensity;
+            game.sunLight.target.position.copy(game.player.position);
+            game.sunLight.target.updateMatrixWorld();
+            game.sunLight.position.copy(game.player.position).add(
+                new THREE.Vector3(CFG.lighting.sunX, CFG.lighting.sunY, CFG.lighting.sunZ).normalize().multiplyScalar(200)
+            );
+            // Update sandbox panel derived stats readout
+            game.updateSandboxPanel();
+        },
+        exit(game) {
+            const panel = document.getElementById('wpn-sandbox-panel');
+            if (panel) panel.style.display = 'none';
+            if (game.enemies.mesh) game.enemies.mesh.visible = true;
+        }
     }
 };
 
@@ -3807,7 +4028,12 @@ class Game {
         ls.classList.add('fade-out');
         setTimeout(() => { ls.style.display = 'none'; }, 800);
 
-        this.setState('attract');
+        if (WEAPON_SANDBOX) {
+            this.buildSandboxPanel();
+            this.setState('weapontest');
+        } else {
+            this.setState('attract');
+        }
 
         // Start loop
         this.renderer.setAnimationLoop(() => this.animate());
@@ -3823,7 +4049,7 @@ class Game {
         });
         // Blocker click → resume playing (only relevant in PLAYING pause state)
         blocker.addEventListener('click', () => {
-            if (this.state === 'playing' || this.state === 'pregame' || this.state === 'drop') {
+            if (this.state === 'playing' || this.state === 'pregame' || this.state === 'drop' || this.state === 'weapontest') {
                 this.renderer.domElement.requestPointerLock();
             }
         });
@@ -3831,7 +4057,7 @@ class Game {
             const locked = document.pointerLockElement === this.renderer.domElement;
             this.player.locked = locked;
             // In active game states, show blocker when pointer lock lost (pause)
-            if (this.state === 'playing' || this.state === 'pregame' || this.state === 'drop') {
+            if (this.state === 'playing' || this.state === 'pregame' || this.state === 'drop' || this.state === 'weapontest') {
                 if (this.debug && this.debug.visible) {
                     blocker.style.display = 'none';
                 } else if (!locked) {
@@ -4382,6 +4608,162 @@ class Game {
         this.enemies.clearKillCount(this.renderer);
     }
 
+    // ── Weapon Sandbox Panel ─────────────────────────────
+    buildSandboxPanel() {
+        const panel = document.createElement('div');
+        panel.id = 'wpn-sandbox-panel';
+        panel.style.cssText = `
+            position: fixed; top: 10px; left: 10px; width: 320px;
+            background: rgba(0,0,0,0.85); border: 1px solid #555; border-radius: 8px;
+            color: #eee; font: 12px/1.4 monospace; padding: 12px; z-index: 9999;
+            display: none; pointer-events: auto; max-height: 95vh; overflow-y: auto;
+            user-select: none;
+        `;
+        panel.innerHTML = `
+            <div style="font-size:14px;font-weight:bold;margin-bottom:8px;color:#ff8844;">
+                WEAPON SANDBOX
+            </div>
+            <div style="font-size:10px;color:#888;margin-bottom:10px;">
+                Click to lock mouse · ESC to unlock · Sliders work while unlocked
+            </div>
+            <div id="sb-raw-params"></div>
+            <hr style="border-color:#444;margin:10px 0;">
+            <div style="font-size:11px;font-weight:bold;color:#5599ff;margin-bottom:6px;">DERIVED STATS (soft-coupled)</div>
+            <div id="sb-derived-stats" style="font-size:11px;"></div>
+            <hr style="border-color:#444;margin:10px 0;">
+            <div style="font-size:11px;font-weight:bold;color:#44ddaa;margin-bottom:6px;">CFG TWEAKS</div>
+            <div id="sb-cfg-tweaks"></div>
+            <hr style="border-color:#444;margin:10px 0;">
+            <div style="font-size:11px;font-weight:bold;color:#cc66ff;margin-bottom:6px;">PRESETS</div>
+            <div id="sb-presets" style="display:flex;gap:4px;flex-wrap:wrap;"></div>
+        `;
+        document.body.appendChild(panel);
+
+        // Raw param sliders
+        const rawParams = [
+            { key: 'spread', label: 'SPREAD', color: '#5599ff' },
+            { key: 'rate',   label: 'RATE',   color: '#44ddaa' },
+            { key: 'power',  label: 'POWER',  color: '#ff8844' },
+            { key: 'speed',  label: 'SPEED',  color: '#cc66ff' },
+        ];
+        const rawDiv = document.getElementById('sb-raw-params');
+        rawParams.forEach(({ key, label, color }) => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:4px;';
+            row.innerHTML = `
+                <span style="width:52px;color:${color};font-size:11px;font-weight:bold;">${label}</span>
+                <input type="range" min="0" max="255" value="${this.player.wpnParams[key]}"
+                    data-param="${key}" class="sb-slider"
+                    style="flex:1;accent-color:${color};height:16px;cursor:pointer;">
+                <span class="sb-val" data-param="${key}" style="width:28px;text-align:right;font-size:11px;">${this.player.wpnParams[key]}</span>
+            `;
+            rawDiv.appendChild(row);
+        });
+        // Wire sliders
+        rawDiv.querySelectorAll('.sb-slider').forEach(slider => {
+            slider.addEventListener('input', () => {
+                const key = slider.dataset.param;
+                const val = parseInt(slider.value);
+                this.player.wpnParams[key] = val;
+                rawDiv.querySelector(`.sb-val[data-param="${key}"]`).textContent = val;
+            });
+        });
+
+        // CFG tweaks
+        const cfgTweaks = [
+            { path: 'projectile.gravity', label: 'Gravity', min: 0, max: 100, step: 1 },
+            { path: 'weapon.convergeDist', label: 'Converge Dist', min: 5, max: 200, step: 5 },
+            { path: 'projectile.explosionRadius', label: 'Base Exp Radius', min: 1, max: 80, step: 1 },
+            { path: 'projectile.explosionForce', label: 'Base Exp Force', min: 1, max: 120, step: 1 },
+            { path: 'heat.coolRate', label: 'Heat Cool Rate', min: 1, max: 50, step: 1 },
+            { path: 'heat.ventRate', label: 'Vent Rate', min: 5, max: 100, step: 1 },
+        ];
+        const cfgDiv = document.getElementById('sb-cfg-tweaks');
+        cfgTweaks.forEach(({ path, label, min, max, step }) => {
+            const parts = path.split('.');
+            const val = CFG[parts[0]][parts[1]];
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:3px;';
+            row.innerHTML = `
+                <span style="width:100px;font-size:10px;color:#aaa;">${label}</span>
+                <input type="range" min="${min}" max="${max}" step="${step}" value="${val}"
+                    data-path="${path}" class="sb-cfg-slider"
+                    style="flex:1;accent-color:#44ddaa;height:14px;cursor:pointer;">
+                <span class="sb-cfg-val" data-path="${path}" style="width:32px;text-align:right;font-size:10px;">${val}</span>
+            `;
+            cfgDiv.appendChild(row);
+        });
+        cfgDiv.querySelectorAll('.sb-cfg-slider').forEach(slider => {
+            slider.addEventListener('input', () => {
+                const parts = slider.dataset.path.split('.');
+                const val = parseFloat(slider.value);
+                CFG[parts[0]][parts[1]] = val;
+                cfgDiv.querySelector(`.sb-cfg-val[data-path="${slider.dataset.path}"]`).textContent = val;
+            });
+        });
+
+        // Presets
+        const presetsDiv = document.getElementById('sb-presets');
+        const presets = [
+            { name: 'Shotgun', params: { spread: 230, rate: 50, power: 160, speed: 60 } },
+            { name: 'Sniper', params: { spread: 5, rate: 20, power: 255, speed: 255 } },
+            { name: 'Gatling', params: { spread: 40, rate: 240, power: 80, speed: 200 } },
+            { name: 'Flamer', params: { spread: 180, rate: 200, power: 60, speed: 20 } },
+            { name: 'Grenade', params: { spread: 60, rate: 15, power: 255, speed: 40 } },
+            { name: 'MAX', params: { spread: 255, rate: 255, power: 255, speed: 255 } },
+            { name: 'Reset', params: { spread: 128, rate: 128, power: 128, speed: 128 } },
+        ];
+        presets.forEach(({ name, params }) => {
+            const btn = document.createElement('button');
+            btn.textContent = name;
+            btn.style.cssText = `
+                padding: 3px 8px; font: bold 10px monospace; cursor: pointer;
+                background: #333; color: #eee; border: 1px solid #666; border-radius: 4px;
+            `;
+            btn.addEventListener('click', () => {
+                Object.assign(this.player.wpnParams, params);
+                // Sync sliders
+                rawDiv.querySelectorAll('.sb-slider').forEach(s => {
+                    s.value = this.player.wpnParams[s.dataset.param];
+                    rawDiv.querySelector(`.sb-val[data-param="${s.dataset.param}"]`).textContent = s.value;
+                });
+            });
+            btn.addEventListener('mouseenter', () => btn.style.background = '#555');
+            btn.addEventListener('mouseleave', () => btn.style.background = '#333');
+            presetsDiv.appendChild(btn);
+        });
+    }
+
+    updateSandboxPanel() {
+        const statsDiv = document.getElementById('sb-derived-stats');
+        if (!statsDiv) return;
+        const stats = this.player.getDerivedWeaponStats();
+        const maxRange = stats.effectiveSpeed * stats.effectiveLife;
+        statsDiv.innerHTML = `
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 12px;">
+                <span style="color:#888;">Pellets</span><span style="color:#fff;font-weight:bold;">${stats.pelletCount}</span>
+                <span style="color:#888;">Fire Rate</span><span>${stats.fireRate.toFixed(1)} /s</span>
+                <span style="color:#888;">Speed</span><span>${stats.effectiveSpeed.toFixed(0)} m/s</span>
+                <span style="color:#888;">Life</span><span>${stats.effectiveLife.toFixed(2)}s</span>
+                <span style="color:#888;">Max Range</span><span style="color:#ffaa44;">${maxRange.toFixed(0)}m</span>
+                <span style="color:#888;">Dmg/Pellet</span><span>${stats.damagePerPellet.toFixed(1)}</span>
+                <span style="color:#888;">Total DPS</span><span style="color:#ff6644;font-weight:bold;">${(stats.damagePerPellet * stats.pelletCount * stats.fireRate).toFixed(0)}</span>
+                <span style="color:#888;">Spread</span><span>${(stats.spreadAngle * 180 / Math.PI).toFixed(1)}°</span>
+                <span style="color:#888;">Exp Radius</span><span>${stats.effectiveRadius.toFixed(1)}</span>
+                <span style="color:#888;">Exp Force</span><span>${stats.effectiveForce.toFixed(1)}</span>
+                <span style="color:#888;">Heat/Shot</span><span>${stats.heatPerShot.toFixed(2)}</span>
+            </div>
+        `;
+        // Also sync slider positions (in case preset keys 7/8/9 changed them)
+        document.querySelectorAll('#sb-raw-params .sb-slider').forEach(s => {
+            const key = s.dataset.param;
+            if (parseInt(s.value) !== this.player.wpnParams[key]) {
+                s.value = this.player.wpnParams[key];
+                document.querySelector(`#sb-raw-params .sb-val[data-param="${key}"]`).textContent = this.player.wpnParams[key];
+            }
+        });
+    }
+
     animate() {
         this.profiler.beginFrame();
         const dt = Math.min(this.clock.getDelta(), 0.05);
@@ -4398,8 +4780,8 @@ class Game {
             }
         } catch (e) { console.error('State update error:', e); }
 
-        // HUD (only visible during playing/drop)
-        if (this.state === 'playing' || this.state === 'drop') {
+        // HUD (only visible during playing/drop/weapontest)
+        if (this.state === 'playing' || this.state === 'drop' || this.state === 'weapontest') {
             const hpPct = (this.player.health / CFG.player.maxHealth) * 100;
             document.getElementById('health-bar').style.width = hpPct + '%';
             // Ammo display hidden — heat system replaces ammo
@@ -4423,56 +4805,64 @@ class Game {
             if (heatNorm < 0.5) heatBar.style.background = `rgb(${Math.round(heatNorm * 2 * 255)}, ${Math.round(180 + heatNorm * 75)}, 40)`;
             else if (heatNorm < 0.8) heatBar.style.background = `rgb(255, ${Math.round(255 - (heatNorm - 0.5) * 3.33 * 255)}, 20)`;
             else heatBar.style.background = `rgb(255, ${Math.round(60 - (heatNorm - 0.8) * 5 * 60)}, ${Math.round(20 + Math.sin(performance.now() * 0.01) * 20)})`;
-            const killCount = this.enemies.getKillCount();
-            const aliveCount = Math.max(0, ENEMY_COUNT - killCount);
-            // Kill streak juice
-            if (!this._kcJuice) this._kcJuice = { prevKills: 0, scale: 100, rot: 0, rotDir: 0, lastThousand: 0, lastTenK: 0, streak: 0, maxStreak: 0, idleTime: 99, opacity: 0 };
-            const kc = this._kcJuice;
-            const newKills = killCount - kc.prevKills;
-            if (newKills > 0) {
-                // Spawn pickup drops from kills
-                this.pickupManager.spawnDrops(newKills);
-                kc.streak += newKills;
-                if (kc.streak > kc.maxStreak) kc.maxStreak = kc.streak;
-                kc.idleTime = 0;
-                kc.opacity = 1;
-                kc.scale = Math.min(200, kc.scale + newKills);
-                if (Math.abs(kc.rot) < 0.5) kc.rotDir = Math.random() < 0.5 ? -1 : 1;
-                else kc.rotDir = kc.rot > 0 ? 1 : -1;
-                kc.rot = Math.max(-3, Math.min(3, kc.rot + kc.rotDir * newKills * 0.5));
-                // Milestone dings (based on total kills, not streak)
-                const curThousand = Math.floor(killCount / 1000);
-                const curTenK = Math.floor(killCount / 10000);
-                if (curThousand > kc.lastThousand) this.audio.play('ding100');
-                if (curTenK > kc.lastTenK) this.audio.play('ding1000');
-                kc.lastThousand = curThousand;
-                kc.lastTenK = curTenK;
+            // Kill tracking & streak (skip in weapon sandbox)
+            if (this.state !== 'weapontest') {
+                const killCount = this.enemies.getKillCount();
+                const aliveCount = Math.max(0, ENEMY_COUNT - killCount);
+                // Kill streak juice
+                if (!this._kcJuice) this._kcJuice = { prevKills: 0, scale: 100, rot: 0, rotDir: 0, lastThousand: 0, lastTenK: 0, streak: 0, maxStreak: 0, idleTime: 99, opacity: 0 };
+                const kc = this._kcJuice;
+                const newKills = killCount - kc.prevKills;
+                if (newKills > 0) {
+                    // Spawn pickup drops from kills
+                    this.pickupManager.spawnDrops(newKills);
+                    kc.streak += newKills;
+                    if (kc.streak > kc.maxStreak) kc.maxStreak = kc.streak;
+                    kc.idleTime = 0;
+                    kc.opacity = 1;
+                    kc.scale = Math.min(200, kc.scale + newKills);
+                    if (Math.abs(kc.rot) < 0.5) kc.rotDir = Math.random() < 0.5 ? -1 : 1;
+                    else kc.rotDir = kc.rot > 0 ? 1 : -1;
+                    kc.rot = Math.max(-3, Math.min(3, kc.rot + kc.rotDir * newKills * 0.5));
+                    // Milestone dings (based on total kills, not streak)
+                    const curThousand = Math.floor(killCount / 1000);
+                    const curTenK = Math.floor(killCount / 10000);
+                    if (curThousand > kc.lastThousand) this.audio.play('ding100');
+                    if (curTenK > kc.lastTenK) this.audio.play('ding1000');
+                    kc.lastThousand = curThousand;
+                    kc.lastTenK = curTenK;
+                }
+                kc.prevKills = killCount;
+                // Streak idle: fade out after 1s, reset after fully faded
+                kc.idleTime += dt;
+                if (kc.idleTime > 1) {
+                    kc.opacity = Math.max(0, kc.opacity - dt * 5);
+                    if (kc.opacity <= 0) kc.streak = 0;
+                }
+                // Decay scale/rotation
+                kc.scale += (100 - kc.scale) * Math.min(1, 3 * dt);
+                kc.rot += (0 - kc.rot) * Math.min(1, 4 * dt);
+                // Kill streak (center) — full juice
+                const kcEl = document.getElementById('kill-count');
+                kcEl.textContent = kc.streak > 0 ? kc.streak.toLocaleString() : '';
+                kcEl.style.transform = `translateX(-50%) scale(${kc.scale / 100}) rotate(${kc.rot.toFixed(1)}deg)`;
+                kcEl.style.opacity = kc.opacity.toFixed(2);
+                // Alive count (bottom-right) — 40% juice
+                const acScale = 100 + (kc.scale - 100) * 0.4;
+                const acRot = kc.rot * 0.4;
+                const acEl = document.getElementById('alive-count');
+                acEl.textContent = `${aliveCount.toLocaleString()} alive`;
+                acEl.style.transform = `scale(${acScale / 100}) rotate(${acRot.toFixed(1)}deg)`;
+                const mins = Math.floor(this.roundStats.survivalTime / 60);
+                const secs = Math.floor(this.roundStats.survivalTime % 60);
+                document.getElementById('timer').textContent =
+                    `${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
+            } else {
+                // In weapon sandbox: hide kill/alive counters, show SANDBOX label
+                document.getElementById('kill-count').textContent = '';
+                document.getElementById('alive-count').textContent = 'WEAPON SANDBOX';
+                document.getElementById('timer').textContent = '';
             }
-            kc.prevKills = killCount;
-            // Streak idle: fade out after 1s, reset after fully faded
-            kc.idleTime += dt;
-            if (kc.idleTime > 1) {
-                kc.opacity = Math.max(0, kc.opacity - dt * 5);
-                if (kc.opacity <= 0) kc.streak = 0;
-            }
-            // Decay scale/rotation
-            kc.scale += (100 - kc.scale) * Math.min(1, 3 * dt);
-            kc.rot += (0 - kc.rot) * Math.min(1, 4 * dt);
-            // Kill streak (center) — full juice
-            const kcEl = document.getElementById('kill-count');
-            kcEl.textContent = kc.streak > 0 ? kc.streak.toLocaleString() : '';
-            kcEl.style.transform = `translateX(-50%) scale(${kc.scale / 100}) rotate(${kc.rot.toFixed(1)}deg)`;
-            kcEl.style.opacity = kc.opacity.toFixed(2);
-            // Alive count (bottom-right) — 40% juice
-            const acScale = 100 + (kc.scale - 100) * 0.4;
-            const acRot = kc.rot * 0.4;
-            const acEl = document.getElementById('alive-count');
-            acEl.textContent = `${aliveCount.toLocaleString()} alive`;
-            acEl.style.transform = `scale(${acScale / 100}) rotate(${acRot.toFixed(1)}deg)`;
-            const mins = Math.floor(this.roundStats.survivalTime / 60);
-            const secs = Math.floor(this.roundStats.survivalTime % 60);
-            document.getElementById('timer').textContent =
-                `${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
         }
 
         document.getElementById('info').innerHTML = `FPS: ${this.fpsDisplay}<br>Particles: ${this.particles.POOL_SIZE.toLocaleString()}`;
@@ -4481,7 +4871,7 @@ class Game {
         // Player shadow
         const psY = this.terrain.getHeight(this.player.position.x, this.player.position.z);
         this.playerShadow.position.set(this.player.position.x, psY + 0.12, this.player.position.z);
-        this.playerShadow.visible = (this.state === 'playing' || this.state === 'drop');
+        this.playerShadow.visible = (this.state === 'playing' || this.state === 'drop' || this.state === 'weapontest');
 
         // Sky follows camera
         if (this.skyMesh) this.skyMesh.position.copy(this._activeCamera.position);
