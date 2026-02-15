@@ -543,7 +543,21 @@ const BenchAPI = {
             return [];
         }
     },
+
+    ping(event = 'visit') {
+        if (!BENCH_API) return;
+        try {
+            fetch(BENCH_API + '?action=ping', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ event, game_ver: typeof VERSION !== 'undefined' ? VERSION : '' }),
+            });
+        } catch (e) { /* fire and forget */ }
+    },
 };
+
+// ── Analytics: track page visit ──
+BenchAPI.ping('visit');
 
 // ============================================================
 //  LOADING SCREEN
@@ -4477,7 +4491,7 @@ class Game {
             b.onclick = fn;
             btns.appendChild(b);
         };
-        mkBtn('START GAME', () => this.setState('pregame'));
+        mkBtn('START GAME', () => { BenchAPI.ping('game_start'); this.setState('pregame'); });
         mkBtn('WHAT IS THIS?', () => this.showPanel('whatis-panel'));
         mkBtn('HIGH SCORES', () => this.showPanel('scores-panel'));
         mkBtn('SYSTEM INFO', () => this.showPanel('sysinfo-panel'));
@@ -5071,7 +5085,7 @@ class Game {
             b.onclick = fn;
             buttons.appendChild(b);
         };
-        mkBtn('PLAY AGAIN', () => this.setState('pregame'));
+        mkBtn('PLAY AGAIN', () => { BenchAPI.ping('game_start'); this.setState('pregame'); });
         mkBtn('MAIN MENU', () => this.setState('attract'));
         el.appendChild(buttons);
         // Support banner
