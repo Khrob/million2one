@@ -100,13 +100,7 @@ canvas { display: block; }
 .go-buttons { display: flex; gap: 16px; }
 .go-highscore { color: #fa4; font-size: 18px; letter-spacing: 3px; margin-bottom: 20px; text-align: center; text-shadow: 0 0 12px rgba(255,170,68,0.4); animation: go-wibble 0.8s ease-in-out infinite; display: none; }
 @keyframes go-wibble { 0%,100% { transform: rotate(-2deg) scale(1); } 25% { transform: rotate(1.5deg) scale(1.05); } 50% { transform: rotate(-1deg) scale(1.02); } 75% { transform: rotate(2deg) scale(1.04); } }
-/* "What is this?" tab */
-#whatis-tab { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); background: rgba(136,170,255,0.1); color: #8af; border: 1px solid rgba(136,170,255,0.25); border-bottom: none; border-radius: 8px 8px 0 0; padding: 8px 24px; font-family: 'Share Tech Mono', monospace; font-size: 12px; letter-spacing: 1px; cursor: pointer; transition: all 0.2s; z-index: 91; pointer-events: auto; }
-#whatis-tab:hover { background: rgba(136,170,255,0.25); color: #fff; }
-#whatis-tab.wiggle { animation: tab-wiggle 3s ease-in-out infinite; }
-@keyframes tab-wiggle { 0%,60%,100% { transform: translateX(-50%) translateY(0); } 65% { transform: translateX(-50%) translateY(-4px); } 70% { transform: translateX(-50%) translateY(0); } 75% { transform: translateX(-50%) translateY(-3px); } 80% { transform: translateX(-50%) translateY(0); } }
-#whatis-panel { display: none; position: absolute; bottom: 36px; left: 50%; transform: translateX(-50%); background: rgba(10,10,20,0.96); border: 1px solid rgba(136,170,255,0.2); border-radius: 8px; padding: 24px 30px; max-width: 480px; width: 90vw; z-index: 91; pointer-events: auto; }
-#whatis-panel h3 { color: #8af; font-size: 15px; margin-bottom: 12px; letter-spacing: 2px; }
+/* "What is this?" panel (now a menu-panel) */
 #whatis-panel p { color: #aaa; font-size: 12px; line-height: 1.8; margin: 8px 0; }
 #whatis-panel .tag { display: inline-block; background: rgba(136,170,255,0.12); color: #8af; padding: 2px 8px; border-radius: 3px; font-size: 11px; margin: 0 2px; }
 #whatis-panel .warn { color: #fa4; }
@@ -3778,15 +3772,22 @@ const STATES = {
             game.player.heat = 0;
             game.player.grounded = true;
             game.player.weaponGroup.visible = true;
-            game.player.locked = true;
+            game.player.locked = false; // will become true when pointer lock acquired
             game.player.shooting = false;
-            // Request pointer lock
-            game.renderer.domElement.requestPointerLock();
             // Hide enemy mesh
             if (game.enemies.mesh) game.enemies.mesh.visible = false;
+            // Show click-to-start prompt (pointer lock needs user gesture)
+            game._sbPrompt = true;
         },
         update(dt, game) {
-            if (!game.player.locked) return;
+            // Unlocked: show click-to-start/resume prompt
+            const prompt = document.getElementById('sb-lock-prompt');
+            if (!game.player.locked) {
+                if (prompt) prompt.style.display = 'flex';
+                return;
+            }
+            if (prompt) prompt.style.display = 'none';
+            game._sbPrompt = false;
             game.player.update(dt);
             // Screen shake
             if (game.shakeTimer > 0) {
@@ -4053,11 +4054,22 @@ class Game {
                 this.renderer.domElement.requestPointerLock();
             }
         });
+        // Click canvas directly to re-lock in weapon sandbox (no blocker overlay)
+        this.renderer.domElement.addEventListener('click', () => {
+            if (this.state === 'weapontest' && !document.pointerLockElement) {
+                this.renderer.domElement.requestPointerLock();
+            }
+        });
         document.addEventListener('pointerlockchange', () => {
             const locked = document.pointerLockElement === this.renderer.domElement;
             this.player.locked = locked;
+            // In weapon sandbox: no blocker, just toggle locked state
+            if (this.state === 'weapontest') {
+                blocker.style.display = 'none';
+                return;
+            }
             // In active game states, show blocker when pointer lock lost (pause)
-            if (this.state === 'playing' || this.state === 'pregame' || this.state === 'drop' || this.state === 'weapontest') {
+            if (this.state === 'playing' || this.state === 'pregame' || this.state === 'drop') {
                 if (this.debug && this.debug.visible) {
                     blocker.style.display = 'none';
                 } else if (!locked) {
@@ -4208,9 +4220,14 @@ class Game {
             btns.appendChild(b);
         };
         mkBtn('START GAME', () => this.setState('pregame'));
+        mkBtn('WHAT IS THIS?', () => this.showPanel('whatis-panel'));
         mkBtn('HIGH SCORES', () => this.showPanel('scores-panel'));
         mkBtn('SETTINGS', () => this.showPanel('settings-panel'));
         mkBtn('HELP', () => this.showPanel('help-panel'));
+        mkBtn('WEAPON SANDBOX', () => {
+            window.location.hash = 'weapon';
+            window.location.reload();
+        });
         el.appendChild(btns);
         // Support banner
         const banner = document.createElement('div');
@@ -4222,28 +4239,21 @@ class Game {
         banner.appendChild(supportBtn);
         el.appendChild(banner);
 
-        // "What is this?" tab
-        const whatisTab = document.createElement('div');
-        whatisTab.id = 'whatis-tab';
-        whatisTab.textContent = 'What is this?';
+        // "What is this?" panel (shown via menu button)
         const whatisPanel = document.createElement('div');
+        whatisPanel.className = 'menu-panel';
         whatisPanel.id = 'whatis-panel';
-        whatisPanel.innerHTML = `<h3>MILLION2ONE</h3>
+        whatisPanel.innerHTML = `<h2>WHAT IS THIS?</h2>
             <p>A browser-based FPS experiment: <span class="tag">1,000,000 enemies</span> simulated on the GPU, all at once, in a single HTML file.</p>
             <p class="warn">This is an early prototype. You'll need a relatively beefy machine with a decent GPU to run it smoothly — optimisation hasn't begun yet.</p>
             <p>We're still working out the core gameplay mechanics — weapon tuning, enemy behaviour, movement systems — so things will change. A lot.</p>
             <p>All graphics are placeholder / work-in-progress. If it looks rough, that's because it is!</p>
             <p style="margin-top:12px;color:#8af">Feedback is very welcome. Hit the <span class="tag">SUPPORT THIS GAME</span> button above to share your thoughts or fuel development.</p>`;
-        const seenWhatis = localStorage.getItem('m2o_seen_whatis');
-        const hasPlayed = localStorage.getItem('fps_highscores');
-        if (!seenWhatis && !hasPlayed) whatisTab.classList.add('wiggle');
-        whatisTab.onclick = () => {
-            const showing = whatisPanel.style.display === 'block';
-            whatisPanel.style.display = showing ? 'none' : 'block';
-            whatisTab.classList.remove('wiggle');
-            localStorage.setItem('m2o_seen_whatis', '1');
-        };
-        el.appendChild(whatisTab);
+        const whatisBack = document.createElement('button');
+        whatisBack.className = 'menu-btn back-btn';
+        whatisBack.textContent = 'BACK';
+        whatisBack.onclick = () => whatisPanel.style.display = 'none';
+        whatisPanel.appendChild(whatisBack);
         el.appendChild(whatisPanel);
 
         // High Scores panel
@@ -4620,12 +4630,31 @@ class Game {
             user-select: none;
         `;
         panel.innerHTML = `
-            <div style="font-size:14px;font-weight:bold;margin-bottom:8px;color:#ff8844;">
+            <div style="font-size:14px;font-weight:bold;margin-bottom:4px;color:#ff8844;">
                 WEAPON SANDBOX
             </div>
-            <div style="font-size:10px;color:#888;margin-bottom:10px;">
-                Click to lock mouse · ESC to unlock · Sliders work while unlocked
-            </div>
+            <div style="font-size:10px;color:#666;margin-bottom:8px;">Test and tune weapon feel without enemies</div>
+            <details id="sb-help" style="margin-bottom:10px;cursor:pointer;">
+                <summary style="font-size:10px;color:#8af;letter-spacing:1px;">HOW TO USE</summary>
+                <div style="font-size:10px;color:#999;line-height:1.6;margin-top:6px;padding:6px 8px;background:rgba(136,170,255,0.06);border-radius:4px;">
+                    <div style="color:#aaa;margin-bottom:4px;font-weight:bold;">Controls</div>
+                    <span style="color:#8af;">Click canvas</span> to lock mouse &amp; shoot · <span style="color:#8af;">ESC</span> to unlock &amp; tweak sliders<br>
+                    <span style="color:#8af;">WASD</span> move · <span style="color:#8af;">Shift</span> sprint · <span style="color:#8af;">Space</span> jump · <span style="color:#8af;">R</span> vent heat (jetpack)<br>
+                    <span style="color:#8af;">Hold 1-4</span> + mouse = adjust spread/rate/power/speed in-game<br>
+                    <span style="color:#8af;">7 / 8 / 9</span> = quick-load presets (Shotgun / Sniper / MAX)
+                    <div style="color:#aaa;margin:6px 0 4px;font-weight:bold;">Tuning Guide</div>
+                    <span style="color:#5599ff;">SPREAD</span> &rarr; more pellets, slower speed, shorter range, smaller explosions<br>
+                    <span style="color:#44ddaa;">RATE</span> &rarr; faster fire, less damage per hit (DPS trade-off)<br>
+                    <span style="color:#ff8844;">POWER</span> &rarr; bigger damage &amp; explosion radius per pellet<br>
+                    <span style="color:#cc66ff;">SPEED</span> &rarr; faster projectiles, longer range, flatter trajectory<br>
+                    <span style="color:#888;">Parameters are <em>soft-coupled</em> &mdash; cranking spread automatically reduces speed &amp; range to create natural archetypes.</span>
+                    <div style="color:#aaa;margin:6px 0 4px;font-weight:bold;">What to Look For</div>
+                    Watch the <span style="color:#ffaa44;">Derived Stats</span> panel as you adjust &mdash; Total DPS, Max Range, and Pellet Count tell you the archetype story. Fire at the ground to feel explosion radius, self-knockback, and visual scale.
+                    <div style="margin-top:8px;">
+                        <span style="color:#8af;cursor:pointer;" onclick="window.location.hash='';window.location.reload();">&larr; Back to main game</span>
+                    </div>
+                </div>
+            </details>
             <div id="sb-raw-params"></div>
             <hr style="border-color:#444;margin:10px 0;">
             <div style="font-size:11px;font-weight:bold;color:#5599ff;margin-bottom:6px;">DERIVED STATS (soft-coupled)</div>
@@ -4638,6 +4667,25 @@ class Game {
             <div id="sb-presets" style="display:flex;gap:4px;flex-wrap:wrap;"></div>
         `;
         document.body.appendChild(panel);
+
+        // Click-to-lock prompt (shown when pointer not locked)
+        const prompt = document.createElement('div');
+        prompt.id = 'sb-lock-prompt';
+        prompt.style.cssText = `
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: rgba(0,0,0,0.4); z-index: 50; cursor: pointer;
+            pointer-events: auto;
+        `;
+        prompt.innerHTML = `
+            <div style="font:bold 18px monospace;color:#ff8844;letter-spacing:3px;margin-bottom:8px;">WEAPON SANDBOX</div>
+            <div style="font:13px monospace;color:#aaa;">Click to start shooting</div>
+            <div style="font:11px monospace;color:#666;margin-top:4px;">ESC to unlock mouse &amp; tweak sliders</div>
+        `;
+        prompt.addEventListener('click', () => {
+            this.renderer.domElement.requestPointerLock();
+        });
+        document.body.appendChild(prompt);
 
         // Raw param sliders
         const rawParams = [
