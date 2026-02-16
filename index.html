@@ -295,7 +295,10 @@ canvas { display: block; }
 .modal-panel .kofi-frame { width: 100%; height: 55vh; border: none; border-radius: 4px; background: #0a0a0f; }
 .modal-btn { padding: 8px 16px; background: rgba(136,170,255,0.08); color: #8af; border: 1px solid rgba(136,170,255,0.2); border-radius: 4px; cursor: pointer; font-family: 'Share Tech Mono', monospace; font-size: 11px; letter-spacing: 1px; transition: all 0.15s; margin-right: 6px; }
 .modal-btn:hover { background: rgba(136,170,255,0.18); color: #fff; }
-.feedback-sent { color: #4e4; font-size: 12px; display: none; margin-top: 8px; }
+.feedback-sent { color: #4e4; font-size: 12px; display: none; margin-top: 8px; letter-spacing: 0.5px; }
+.fb-cat-btn { padding:4px 10px;font-family:'Share Tech Mono',monospace;font-size:9px;letter-spacing:1px;color:#555;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:3px;cursor:pointer;transition:all 0.15s; }
+.fb-cat-btn:hover { color:#aaa;border-color:rgba(255,255,255,0.15); }
+.fb-cat-btn.active { color:#8af;border-color:rgba(136,170,255,0.3);background:rgba(136,170,255,0.08); }
 </style>
 </head>
 <body>
@@ -367,12 +370,18 @@ canvas { display: block; }
             </div>
         </div>
         <div class="modal-panel" id="panel-feedback">
+            <div style="display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap">
+                <button class="fb-cat-btn active" data-cat="general">GENERAL</button>
+                <button class="fb-cat-btn" data-cat="bug">BUG REPORT</button>
+                <button class="fb-cat-btn" data-cat="feature">FEATURE IDEA</button>
+                <button class="fb-cat-btn" data-cat="praise">PRAISE</button>
+            </div>
             <textarea id="feedback-text" placeholder="Tell us what you think, report bugs, suggest features..."></textarea>
             <div>
+                <button class="modal-btn" id="btn-submit-feedback" style="background:rgba(136,170,255,0.12);color:#8af;border-color:rgba(136,170,255,0.3)">SUBMIT</button>
                 <button class="modal-btn" id="btn-copy-feedback">COPY TO CLIPBOARD</button>
-                <button class="modal-btn" id="btn-email-feedback">SEND VIA EMAIL</button>
             </div>
-            <div class="feedback-sent" id="feedback-sent">Copied!</div>
+            <div class="feedback-sent" id="feedback-sent"></div>
         </div>
     </div>
 </div>
@@ -603,21 +612,60 @@ function initSupportModal() {
         document.getElementById('kofi-fallback').innerHTML =
             `<a href="https://ko-fi.com/${KOFI_USERNAME}" target="_blank">Open Ko-fi in a new tab</a>`;
     }
-    // Feedback
+    // Feedback category buttons
+    let feedbackCategory = 'general';
+    document.querySelectorAll('.fb-cat-btn').forEach(btn => {
+        btn.onclick = () => {
+            document.querySelectorAll('.fb-cat-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            feedbackCategory = btn.dataset.cat;
+        };
+    });
+    // Submit feedback to API
+    document.getElementById('btn-submit-feedback').onclick = async () => {
+        const text = document.getElementById('feedback-text').value.trim();
+        if (!text || text.length < 3) return;
+        const btn = document.getElementById('btn-submit-feedback');
+        const el = document.getElementById('feedback-sent');
+        btn.disabled = true;
+        btn.textContent = 'SENDING...';
+        try {
+            if (!BENCH_API) throw new Error('No API');
+            const res = await fetch(BENCH_API + '?action=feedback', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: text, category: feedbackCategory, game_ver: VERSION }),
+            });
+            const data = await res.json();
+            if (data.ok) {
+                el.style.color = '#4e4';
+                el.textContent = 'Thanks! Your feedback has been received.';
+                el.style.display = 'block';
+                document.getElementById('feedback-text').value = '';
+                setTimeout(() => el.style.display = 'none', 4000);
+            } else {
+                throw new Error(data.error || 'Submission failed');
+            }
+        } catch (e) {
+            el.style.color = '#fa4';
+            el.textContent = 'Could not send — try copying to clipboard instead.';
+            el.style.display = 'block';
+            setTimeout(() => el.style.display = 'none', 4000);
+        }
+        btn.disabled = false;
+        btn.textContent = 'SUBMIT';
+    };
+    // Copy fallback
     document.getElementById('btn-copy-feedback').onclick = () => {
         const text = document.getElementById('feedback-text').value;
         if (!text) return;
         navigator.clipboard.writeText(text).then(() => {
             const el = document.getElementById('feedback-sent');
+            el.style.color = '#4e4';
+            el.textContent = 'Copied to clipboard!';
             el.style.display = 'block';
             setTimeout(() => el.style.display = 'none', 2000);
         });
-    };
-    document.getElementById('btn-email-feedback').onclick = () => {
-        const text = document.getElementById('feedback-text').value;
-        const subject = encodeURIComponent('MILLION2ONE Feedback');
-        const body = encodeURIComponent(text || '');
-        window.open(`mailto:${FEEDBACK_EMAIL}?subject=${subject}&body=${body}`);
     };
 }
 function openSupportModal() {
