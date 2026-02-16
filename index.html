@@ -6055,7 +6055,7 @@ async function checkSystemCapabilities() {
         verdict: 'unsupported',
         benchmarkMs: -1,
         estimatedMaxEnemies: 0,
-        message: 'WebGPU is not available in this browser.',
+        message: '',
         memoryHint: 0,
     };
 
@@ -6256,11 +6256,16 @@ function showCapabilityResult(caps) {
             btnEl.onclick = resolve;
             setTimeout(resolve, 4000);
         } else {
-            // Unsupported — show error, no auto-continue
+            // Unsupported — show friendly explanation, no auto-continue
             const bar = document.getElementById('load-progress');
             if (bar) { bar.style.background = '#f44'; bar.style.width = '100%'; }
             const statusEl = document.getElementById('load-status-text');
-            if (statusEl) { statusEl.style.color = '#f44'; statusEl.textContent = 'Cannot start game'; }
+            if (statusEl) { statusEl.style.color = '#f44'; statusEl.textContent = 'WebGPU not available'; }
+            messageEl.innerHTML = 'MILLION2ONE uses <strong style="color:#8af">WebGPU</strong> to simulate a million enemies on your GPU. '
+                + 'Your browser doesn\'t support it yet, but it\'s coming to all major browsers soon.'
+                + '<br><br><span style="color:#888">Supported now in:</span> Chrome 113+, Edge 113+, Firefox 141+, Safari 18+ (macOS)'
+                + '<br><span style="color:#888">Coming soon:</span> Safari on iOS 26, more platforms'
+                + '<br><br><span style="color:#555">Make sure hardware acceleration is enabled in your browser settings.</span>';
             // Never resolve — halts loading
         }
     });
@@ -6302,12 +6307,14 @@ async function main() {
         const statusEl = document.getElementById('load-status-text');
         if (statusEl) {
             statusEl.style.color = '#f44';
-            statusEl.textContent = 'WebGPU init failed: ' + e.message;
+            statusEl.textContent = 'Something went wrong';
             const bar = document.getElementById('load-progress');
             if (bar) { bar.style.background = '#f44'; bar.style.width = '100%'; }
             const p = document.createElement('p');
-            p.style.cssText = 'color:#555;font-size:11px;margin-top:12px;max-width:400px;text-align:center;letter-spacing:0.5px;line-height:1.6';
-            p.textContent = 'WebGPU requires a modern browser (Chrome 113+, Firefox 141+, Safari 26+). Check that hardware acceleration is enabled.';
+            p.style.cssText = 'color:#888;font-size:11px;margin-top:12px;max-width:400px;text-align:center;letter-spacing:0.5px;line-height:1.6';
+            p.innerHTML = 'The WebGPU renderer failed to initialise. This can happen if your GPU driver is outdated or hardware acceleration is disabled.'
+                + '<br><br><span style="color:#555">Try updating your browser and GPU drivers, or check that hardware acceleration is turned on in your browser settings.</span>'
+                + '<br><span style="color:#444;font-size:10px;margin-top:8px;display:inline-block">Error: ' + e.message + '</span>';
             statusEl.parentNode.appendChild(p);
         }
     }
