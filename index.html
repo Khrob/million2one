@@ -117,6 +117,18 @@ canvas { display: block; }
 /* Gun loadout line in share */
 .go-loadout { color: #666; font-size: 12px; letter-spacing: 1px; margin-bottom: 8px; text-align: center; }
 .go-loadout span { color: #fa4; }
+.go-name-entry { margin:20px auto 16px;text-align:center; }
+.go-name-label { color:#555;font-size:10px;letter-spacing:2px;text-transform:uppercase;margin-bottom:10px; }
+.go-name-slots { display:flex;gap:6px;justify-content:center;margin-bottom:12px; }
+.go-name-slot { width:36px;height:44px;background:rgba(255,255,255,0.04);border:1px solid rgba(136,170,255,0.15);border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:22px;color:#fff;letter-spacing:2px;cursor:pointer;transition:all 0.15s;user-select:none; }
+.go-name-slot:hover { border-color:rgba(136,170,255,0.4);background:rgba(136,170,255,0.08); }
+.go-name-slot.active { border-color:#8af;background:rgba(136,170,255,0.12);box-shadow:0 0 8px rgba(136,170,255,0.2); }
+.go-name-slot.locked { color:#8af;border-color:rgba(136,170,255,0.3); }
+.go-name-arrows { display:flex;flex-direction:column;position:absolute;opacity:0;pointer-events:none;transition:opacity 0.15s; }
+.go-name-submit { padding:8px 24px;background:rgba(136,170,255,0.12);color:#8af;border:1px solid rgba(136,170,255,0.3);border-radius:4px;cursor:pointer;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;transition:all 0.15s; }
+.go-name-submit:hover { background:rgba(136,170,255,0.25);color:#fff; }
+.go-name-submit:disabled { opacity:0.3;cursor:default; }
+.go-name-submitted { color:#4e4;font-size:11px;letter-spacing:1px;margin-top:6px; }
 /* === Confirmation Modal === */
 .confirm-modal-bg { position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:300;display:flex;align-items:center;justify-content:center; }
 .confirm-modal { background:#12121f;border:1px solid rgba(136,170,255,0.25);border-radius:8px;padding:28px 32px;max-width:460px;width:90%;text-align:center; }
@@ -495,7 +507,7 @@ const BenchAPI = {
     async getLeaderboard(vendor, os) {
         if (!BENCH_API) return [];
         try {
-            let url = BENCH_API + '?action=leaderboard';
+            let url = BENCH_API + '?action=leaderboard&_t=' + Date.now();
             if (vendor && vendor !== 'all') url += '&vendor=' + encodeURIComponent(vendor);
             if (os && os !== 'all') url += '&os=' + encodeURIComponent(os);
             const res = await fetch(url);
@@ -508,7 +520,7 @@ const BenchAPI = {
     async getStats() {
         if (!BENCH_API) return null;
         try {
-            const res = await fetch(BENCH_API + '?action=stats');
+            const res = await fetch(BENCH_API + '?action=stats&_t=' + Date.now());
             return await res.json();
         } catch (e) {
             return null;
@@ -518,7 +530,7 @@ const BenchAPI = {
     async getPercentile(benchMs) {
         if (!BENCH_API) return null;
         try {
-            const res = await fetch(BENCH_API + '?action=percentile&bench_ms=' + benchMs);
+            const res = await fetch(BENCH_API + '?action=percentile&bench_ms=' + benchMs + '&_t=' + Date.now());
             return await res.json();
         } catch (e) {
             return null;
@@ -554,7 +566,7 @@ const BenchAPI = {
     async getScores(version, sort) {
         if (!BENCH_API) return [];
         try {
-            let url = BENCH_API + '?action=scores';
+            let url = BENCH_API + '?action=scores&_t=' + Date.now();
             if (version) url += '&version=' + encodeURIComponent(version);
             if (sort) url += '&sort=' + encodeURIComponent(sort);
             const res = await fetch(url);
@@ -578,6 +590,28 @@ const BenchAPI = {
 
 // ── Analytics: track page visit ──
 BenchAPI.ping('visit');
+
+// ── Profanity filter (shadow-flag, not block) ──
+const PROFANITY_LIST = [
+    'fuck','shit','cunt','dick','cock','twat','arse','damn','piss','slut',
+    'tits','wank','fag','nig','ass','cum','porn','rape','nazi','kike',
+    'spic','gook','dyke','homo','milf','stfu','gtfo','wtf','anal','boob',
+    'jews','jizz','knob','muff','pube','turd','whore',
+];
+function checkProfanity(name) {
+    const lower = name.toLowerCase().replace(/[^a-z]/g, '');
+    for (const word of PROFANITY_LIST) {
+        if (lower.includes(word)) return true;
+    }
+    // Also check leetspeak common swaps
+    const leet = lower.replace(/0/g,'o').replace(/1/g,'i').replace(/3/g,'e').replace(/4/g,'a').replace(/5/g,'s').replace(/7/g,'t').replace(/8/g,'b');
+    if (leet !== lower) {
+        for (const word of PROFANITY_LIST) {
+            if (leet.includes(word)) return true;
+        }
+    }
+    return false;
+}
 
 // ============================================================
 //  LOADING SCREEN
@@ -3529,8 +3563,82 @@ function populateGameoverStats(game) {
     overlay.querySelector('.go-loadout').innerHTML = `Loadout: <span>${loadoutHex}</span>`;
     const prevScores = game.getHighScores();
     const isNewHighScore = prevScores.length === 0 || game.roundStats.survivalTime > prevScores[0].time;
+    // Save locally (without name for now)
     game.saveHighScore(game.roundStats);
     overlay.querySelector('.go-highscore').style.display = isNewHighScore ? 'block' : 'none';
+
+    // Reset name entry UI
+    const nameEntry = document.getElementById('go-name-entry');
+    const nameSubmitBtn = document.getElementById('go-name-submit');
+    const nameStatus = document.getElementById('go-name-status');
+    if (nameEntry) nameEntry.style.display = BENCH_API ? 'block' : 'none';
+    if (nameSubmitBtn) {
+        nameSubmitBtn.disabled = false;
+        nameSubmitBtn.textContent = 'SUBMIT SCORE';
+    }
+    if (nameStatus) { nameStatus.textContent = ''; nameStatus.style.display = 'none'; }
+
+    // Wire submit button with current round data
+    if (nameSubmitBtn) {
+        nameSubmitBtn.onclick = async () => {
+            const CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_';
+            const slots = overlay.querySelectorAll('.go-name-slot');
+            let name = '';
+            slots.forEach((s, i) => name += s.textContent);
+            name = name.replace(/_+$/g, '').trim(); // strip trailing underscores
+
+            if (name.length === 0) {
+                nameStatus.style.color = '#fa4';
+                nameStatus.textContent = 'Enter a name first!';
+                nameStatus.style.display = 'block';
+                return;
+            }
+
+            const flagged = checkProfanity(name);
+
+            nameSubmitBtn.disabled = true;
+            nameSubmitBtn.textContent = 'SUBMITTING...';
+            nameStatus.style.display = 'none';
+
+            try {
+                const payload = {
+                    survival_time: parseFloat((game.roundStats.survivalTime || 0).toFixed(2)),
+                    kills: game.roundStats.kills || 0,
+                    shots_fired: game.roundStats.shotsFired || 0,
+                    max_streak: game.roundStats.maxStreak || 0,
+                    loadout: game.roundStats.loadoutHex || '#80808080',
+                    enemy_count: ENEMY_COUNT,
+                    death_cause: game.deathCause || 'enemies',
+                    game_ver: VERSION,
+                    player_name: name,
+                    flagged: flagged ? 1 : 0,
+                };
+                const res = await fetch(BENCH_API + '?action=score_submit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    nameSubmitBtn.textContent = 'SUBMITTED!';
+                    nameStatus.style.color = '#4e4';
+                    nameStatus.textContent = `Rank #${data.rank} of ${data.total_scores} worldwide`;
+                    nameStatus.style.display = 'block';
+                    // Disable slots
+                    slots.forEach(s => { s.classList.add('locked'); s.onclick = null; s.onwheel = null; s.oncontextmenu = null; s.onkeydown = null; });
+                } else {
+                    throw new Error(data.error || 'Failed');
+                }
+            } catch (e) {
+                nameSubmitBtn.disabled = false;
+                nameSubmitBtn.textContent = 'SUBMIT SCORE';
+                nameStatus.style.color = '#f44';
+                nameStatus.textContent = e.message || 'Submission failed. Try again.';
+                nameStatus.style.display = 'block';
+            }
+        };
+    }
+
     analytics.event('game_over', {
         survival_time: Math.round(game.roundStats.survivalTime),
         kills: game.roundStats.kills,
@@ -5128,6 +5236,91 @@ class Game {
         const loadoutLine = document.createElement('div');
         loadoutLine.className = 'go-loadout';
         el.appendChild(loadoutLine);
+
+        // Name entry (arcade style)
+        const nameEntry = document.createElement('div');
+        nameEntry.className = 'go-name-entry';
+        nameEntry.id = 'go-name-entry';
+        const nameLabel = document.createElement('div');
+        nameLabel.className = 'go-name-label';
+        nameLabel.textContent = 'ENTER YOUR NAME FOR THE LEADERBOARD';
+        nameEntry.appendChild(nameLabel);
+
+        const CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_';
+        const SLOT_COUNT = 5;
+        const nameSlots = document.createElement('div');
+        nameSlots.className = 'go-name-slots';
+        const slotEls = [];
+        const slotValues = [0, 0, 0, 0, 0]; // indices into CHARS
+
+        for (let i = 0; i < SLOT_COUNT; i++) {
+            const slot = document.createElement('div');
+            slot.className = 'go-name-slot';
+            slot.textContent = CHARS[0];
+            slot.tabIndex = 0;
+            slot.dataset.idx = i;
+
+            // Click to cycle forward
+            slot.onclick = () => {
+                slotValues[i] = (slotValues[i] + 1) % CHARS.length;
+                slot.textContent = CHARS[slotValues[i]];
+            };
+            // Right-click to cycle backward
+            slot.oncontextmenu = (e) => {
+                e.preventDefault();
+                slotValues[i] = (slotValues[i] - 1 + CHARS.length) % CHARS.length;
+                slot.textContent = CHARS[slotValues[i]];
+            };
+            // Scroll wheel to cycle
+            slot.onwheel = (e) => {
+                e.preventDefault();
+                if (e.deltaY > 0) {
+                    slotValues[i] = (slotValues[i] + 1) % CHARS.length;
+                } else {
+                    slotValues[i] = (slotValues[i] - 1 + CHARS.length) % CHARS.length;
+                }
+                slot.textContent = CHARS[slotValues[i]];
+            };
+            // Keyboard support
+            slot.onkeydown = (e) => {
+                if (e.key === 'ArrowUp' || e.key === 'ArrowRight') {
+                    e.preventDefault();
+                    slotValues[i] = (slotValues[i] + 1) % CHARS.length;
+                    slot.textContent = CHARS[slotValues[i]];
+                } else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') {
+                    e.preventDefault();
+                    slotValues[i] = (slotValues[i] - 1 + CHARS.length) % CHARS.length;
+                    slot.textContent = CHARS[slotValues[i]];
+                } else if (e.key === 'Tab') {
+                    // default tab behaviour
+                } else if (e.key.length === 1 && CHARS.includes(e.key.toUpperCase())) {
+                    e.preventDefault();
+                    const ci = CHARS.indexOf(e.key.toUpperCase());
+                    slotValues[i] = ci;
+                    slot.textContent = CHARS[ci];
+                    // Auto-advance to next slot
+                    if (i < SLOT_COUNT - 1) slotEls[i + 1].focus();
+                }
+            };
+
+            slotEls.push(slot);
+            nameSlots.appendChild(slot);
+        }
+        nameEntry.appendChild(nameSlots);
+
+        const nameSubmit = document.createElement('button');
+        nameSubmit.className = 'go-name-submit';
+        nameSubmit.id = 'go-name-submit';
+        nameSubmit.textContent = 'SUBMIT SCORE';
+        nameEntry.appendChild(nameSubmit);
+
+        const nameStatus = document.createElement('div');
+        nameStatus.className = 'go-name-submitted';
+        nameStatus.id = 'go-name-status';
+        nameEntry.appendChild(nameStatus);
+
+        el.appendChild(nameEntry);
+
         // Share button
         const shareBtn = document.createElement('button');
         shareBtn.className = 'go-share-btn';
@@ -5200,12 +5393,7 @@ class Game {
             scores.sort((a, b) => b.time - a.time);
             localStorage.setItem('fps_highscores', JSON.stringify(scores.slice(0, 20)));
         } catch (e) { /* localStorage not available */ }
-        // Submit to global leaderboard (fire and forget)
-        BenchAPI.submitScore(stats, this.deathCause).then(result => {
-            if (result.ok) {
-                console.log(`Score submitted — global rank #${result.rank} of ${result.total_scores}`);
-            }
-        }).catch(() => {});
+        // Global submission now handled by the name entry UI on the game over screen
     }
 
     getHighScores() {
@@ -5393,16 +5581,18 @@ class Game {
             const killBarColor = (pct) => pct > 60 ? '#4e4' : pct > 30 ? '#fa4' : '#f44';
 
             let html = `<table class="hs-table"><thead><tr>
-                <th>#</th><th>TIME</th><th>KILLS</th><th>STATS</th><th>INFO</th>
+                <th>#</th><th>NAME</th><th>TIME</th><th>KILLS</th><th>STATS</th><th>INFO</th>
             </tr></thead><tbody>`;
 
             for (let i = 0; i < scores.length; i++) {
                 const s = scores[i];
                 const killPct = s.enemy_count ? ((s.kills / s.enemy_count) * 100).toFixed(1) : '?';
                 const rankClass = i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : '';
+                const name = s.player_name || '???';
 
                 html += `<tr>
                     <td class="hs-rank ${rankClass}">${i + 1}</td>
+                    <td style="color:#8af;font-size:13px;letter-spacing:2px;font-weight:bold">${name}</td>
                     <td class="hs-time">${fmtTime(s.survival_time)}</td>
                     <td style="min-width:120px">
                         <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:2px">
